@@ -2,7 +2,7 @@ import { gmail, type gmail_v1 } from "@googleapis/gmail";
 import type { OAuth2Client } from "google-auth-library";
 import { decodeBase64Url, type Address } from "../mail/parse";
 import { toBase64Url } from "../mail/mime";
-import { HistoryExpiredError, type DraftRef, type MailApi } from "./mail-api";
+import { HistoryExpiredError, MessageNotFoundError, type DraftRef, type MailApi } from "./mail-api";
 
 function status(err: unknown): number | undefined {
   const e = err as { code?: number | string; status?: number; response?: { status?: number } };
@@ -23,8 +23,13 @@ export class GoogleMailApi implements MailApi {
   }
 
   async getMessage(id: string) {
-    const res = await this.api.users.messages.get({ userId: "me", id, format: "full" });
-    return res.data;
+    try {
+      const res = await this.api.users.messages.get({ userId: "me", id, format: "full" });
+      return res.data;
+    } catch (err) {
+      if (status(err) === 404) throw new MessageNotFoundError(id);
+      throw err;
+    }
   }
 
   async getThread(threadId: string) {
@@ -34,6 +39,7 @@ export class GoogleMailApi implements MailApi {
 
   async listHistory(startHistoryId: string) {
     const ids = new Set<string>();
+    const readIds = new Set<string>();
     let pageToken: string | undefined;
     let historyId = startHistoryId;
     try {
@@ -41,12 +47,18 @@ export class GoogleMailApi implements MailApi {
         const res = await this.api.users.history.list({
           userId: "me",
           startHistoryId,
-          historyTypes: ["messageAdded"],
+          historyTypes: ["messageAdded", "labelRemoved"],
           pageToken,
           maxResults: 500,
         });
         for (const h of res.data.history ?? []) {
-          for (const added of h.messagesAdded ?? []) if (added.message?.id) ids.add(added.message.id);
+          for (const added of h.messagesAdded ?? []) {
+            // アプリや人が下書きを保存するたびに届く通知は処理しない
+            if (added.message?.id && !added.message.labelIds?.includes("DRAFT")) ids.add(added.message.id);
+          }
+          for (const removed of h.labelsRemoved ?? []) {
+            if (removed.message?.id && removed.labelIds?.includes("UNREAD")) readIds.add(removed.message.id);
+          }
         }
         historyId = res.data.historyId ?? historyId;
         pageToken = res.data.nextPageToken ?? undefined;
@@ -55,7 +67,7 @@ export class GoogleMailApi implements MailApi {
       if (status(err) === 404) throw new HistoryExpiredError();
       throw err;
     }
-    return { messageIds: [...ids], historyId };
+    return { messageIds: [...ids], readIds: [...readIds], historyId };
   }
 
   async listMessageIds(query: string, max: number) {

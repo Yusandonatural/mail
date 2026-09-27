@@ -1,5 +1,5 @@
 import type { Address, GmailMessage } from "@/lib/mail/parse";
-import type { DraftRef, GmailThread, MailApi } from "@/lib/google/mail-api";
+import { MessageNotFoundError, type DraftRef, type GmailThread, type MailApi } from "@/lib/google/mail-api";
 import { toBase64Url } from "@/lib/mail/mime";
 
 export interface FixtureInput {
@@ -73,14 +73,15 @@ export class FakeMail implements MailApi {
   }
   async getMessage(id: string) {
     const m = this.messages.get(id);
-    if (!m) throw new Error(`no message ${id}`);
+    if (!m) throw new MessageNotFoundError(id);
     return m;
   }
   async getThread(threadId: string): Promise<GmailThread> {
     return { id: threadId, messages: [...this.messages.values()].filter((m) => m.threadId === threadId) };
   }
+  readIds: string[] = [];
   async listHistory() {
-    return { messageIds: [...this.messages.keys()], historyId: "200" };
+    return { messageIds: [...this.messages.keys()], readIds: this.readIds, historyId: "200" };
   }
   async listMessageIds() {
     return [...this.messages.keys()];

@@ -37,7 +37,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ messageId: 
       "Content-Type": wantInline ? info.mimeType : "application/octet-stream",
       "Content-Disposition": disposition,
       "X-Content-Type-Options": "nosniff",
-      "Content-Security-Policy": "sandbox",
+      // Chrome の PDF ビューアは sandbox の中では開けないので、PDF のプレビューだけ外す
+      ...(wantInline && info.mimeType === "application/pdf" ? {} : { "Content-Security-Policy": "sandbox" }),
       "Cache-Control": "private, no-store",
     },
   });

@@ -5,7 +5,7 @@ import { classifyByHeaders, type SenderRule } from "./classify/stage1";
 import { mergeClassification, type MergedClassification } from "./classify/merge";
 import type { Classifier, ContentClassification } from "./classify/types";
 import { DATE_KINDS, STATUS_LABELS, isFolder, type Folder } from "./domain";
-import type { MailApi } from "./google/mail-api";
+import { MessageNotFoundError, type MailApi } from "./google/mail-api";
 import { LabelResolver } from "./labels";
 import { parseMessage, stripQuoted, type ParsedMessage } from "./mail/parse";
 import { enqueue } from "./jobs";
@@ -107,7 +107,13 @@ export async function processMessage(
     .limit(1);
   if (existing.length) return { kind: "skipped", reason: "already_processed" };
 
-  const raw = await mail.getMessage(gmailMessageId);
+  let raw;
+  try {
+    raw = await mail.getMessage(gmailMessageId);
+  } catch (err) {
+    if (err instanceof MessageNotFoundError) return { kind: "skipped", reason: "not_found" };
+    throw err;
+  }
   const msg = parseMessage(raw);
 
   if (msg.labelIds.includes("SENT") || msg.from?.email === user.email) {

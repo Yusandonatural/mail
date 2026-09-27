@@ -40,7 +40,7 @@ Google Workspace の管理者権限が必要です。
 3. **OAuth を設定する。** 同意画面は「内部」にします。OAuth クライアント（ウェブアプリ）を作り、承認済みのリダイレクト URI に `https://<公開URL>/api/auth/callback` を、承認済みの JavaScript 生成元に `https://<公開URL>` を入れます。
 4. **Pub/Sub を設定する。** トピックを作り、`gmail-api-push@system.gserviceaccount.com` にパブリッシャー権限を付けます。push サブスクリプションの送信先は `https://<公開URL>/api/gmail/push` にし、認証を有効にしてサービスアカウントを選び、オーディエンスを同じ URL にします。
 5. **PostgreSQL を用意する。** Cloud SQL など。
-6. **環境変数を入れてデプロイする。** `.env.example` を参照してください。秘密の値は Secret Manager に置きます。デプロイのたびに次を実行します。
+6. **環境変数を入れてデプロイする。** `.env.example` を参照してください。秘密の値は Secret Manager に置きます。Cloud Run のリクエストのタイムアウトは 300 秒にします。デプロイのたびに、リポジトリを取得した環境（Cloud Build の手順か手元の PC）で次を実行します。コンテナの中にはマイグレーションの道具を入れていません。
 
    ```sh
    DATABASE_URL=... ALLOWED_DOMAIN=yusando.com npm run db:migrate

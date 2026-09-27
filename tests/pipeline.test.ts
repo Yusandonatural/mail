@@ -183,6 +183,15 @@ describe("受信メールの処理", () => {
   });
 });
 
+describe("消えたメッセージ", () => {
+  it("Gmail に無いメッセージ（差し替えられた下書きなど）は失敗にせず飛ばす", async () => {
+    const db = await testDb();
+    const user = await makeUser(db);
+    const r = await processMessage({ db, mail: new FakeMail(), classifier: new FakeClassifier() }, user, "gone");
+    expect(r).toEqual({ kind: "skipped", reason: "not_found" });
+  });
+});
+
 describe("過去メールの取り込み", () => {
   it("分類はするが下書きは自動で作らない", async () => {
     const db = await testDb();

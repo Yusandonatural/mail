@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "./db";
-import { users, type User } from "./db/schema";
+import { messages, users, type User } from "./db/schema";
 import { HistoryExpiredError, type MailApi } from "./google/mail-api";
 import { enqueue } from "./jobs";
 
@@ -47,8 +47,14 @@ export async function syncUser(db: Db, mail: MailApi, user: User): Promise<numbe
     return 0;
   }
   try {
-    const { messageIds, historyId } = await mail.listHistory(user.historyId);
+    const { messageIds, readIds, historyId } = await mail.listHistory(user.historyId);
     const n = await enqueueMessages(db, user, messageIds);
+    if (readIds.length) {
+      await db
+        .update(messages)
+        .set({ unread: false })
+        .where(and(eq(messages.userId, user.id), inArray(messages.gmailMessageId, readIds)));
+    }
     await db.update(users).set({ historyId }).where(eq(users.id, user.id));
     return n;
   } catch (err) {

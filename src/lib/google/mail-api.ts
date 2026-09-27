@@ -9,6 +9,13 @@ export class HistoryExpiredError extends Error {
   }
 }
 
+/** メッセージが既に無い（下書きの差し替え・削除など） */
+export class MessageNotFoundError extends Error {
+  constructor(id: string) {
+    super(`メッセージ ${id} は Gmail にありません`);
+  }
+}
+
 export interface DraftRef {
   draftId: string;
   messageId: string;
@@ -21,10 +28,12 @@ export interface DraftRef {
  */
 export interface MailApi {
   getProfile(): Promise<{ emailAddress: string; historyId: string }>;
+  /** 無ければ MessageNotFoundError */
   getMessage(id: string): Promise<GmailMessage>;
   getThread(threadId: string): Promise<GmailThread>;
-  /** startHistoryId 以降に追加されたメッセージ ID。古すぎれば HistoryExpiredError */
-  listHistory(startHistoryId: string): Promise<{ messageIds: string[]; historyId: string }>;
+  /** startHistoryId 以降に追加されたメッセージ ID（下書きは除く）。古すぎれば HistoryExpiredError */
+  /** readIds は Gmail 側（スマホの Gmail など）で既読にされたメッセージ */
+  listHistory(startHistoryId: string): Promise<{ messageIds: string[]; readIds: string[]; historyId: string }>;
   listMessageIds(query: string, max: number): Promise<string[]>;
   listLabels(): Promise<Array<{ id: string; name: string }>>;
   createLabel(name: string): Promise<{ id: string; name: string }>;
