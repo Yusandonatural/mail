@@ -31,6 +31,8 @@ export interface ParsedMessage {
   date: Date;
   messageIdHeader: string | null;
   references: string | null;
+  /** メルマガ・一斉配信（List-Unsubscribe か Precedence: bulk/list がある） */
+  bulk: boolean;
   text: string;
   html: string | null;
   attachments: AttachmentInfo[];
@@ -163,6 +165,7 @@ export function parseMessage(msg: GmailMessage): ParsedMessage {
     date,
     messageIdHeader: header(msg, "Message-ID") ?? header(msg, "Message-Id"),
     references: header(msg, "References"),
+    bulk: Boolean(header(msg, "List-Unsubscribe")) || /^(bulk|list|junk)$/i.test((header(msg, "Precedence") ?? "").trim()),
     text,
     html,
     attachments: out.attachments,

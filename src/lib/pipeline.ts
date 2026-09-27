@@ -129,7 +129,10 @@ export async function processMessage(
 
   let content: ContentClassification | null = null;
   const ruleSaysInfo = (stage1.source === "sender_rule" || stage1.source === "domain_rule") && stage1.folder === "info";
-  if (!ruleSaysInfo) {
+  // 一斉配信が個人・総合窓口アドレスに届いたときは、Claude を使わずニュースレターへ。
+  // 実際の受信箱の約8割がこれに当たる。用途別アドレス宛てと送信者ルールがあるものは対象外
+  const bulkToPersonal = msg.bulk && (stage1.source === "none" || (stage1.source === "address" && stage1.contentDecides));
+  if (!ruleSaysInfo && !bulkToPersonal) {
     content = await reuseClassification(db, msg.messageIdHeader);
     if (!content) {
       try {
@@ -149,7 +152,9 @@ export async function processMessage(
     }
   }
 
-  const merged = mergeClassification(stage1, content);
+  const merged: MergedClassification = bulkToPersonal
+    ? { folder: "info", category: "info", secondaryFolders: stage1.secondaryFolders, source: "content", needsReview: false }
+    : mergeClassification(stage1, content);
   const needsReply = content?.needs_reply ?? false;
 
   // 相手が仮予定を承諾したと読めるか（同じスレッドに「仮」の予定があるときだけ）

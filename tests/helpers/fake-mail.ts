@@ -15,6 +15,7 @@ export interface FixtureInput {
   date?: Date;
   listId?: string;
   messageId?: string;
+  headers?: Record<string, string>;
   attachments?: Array<{ filename: string; mimeType: string; attachmentId: string }>;
 }
 
@@ -29,6 +30,7 @@ export function gmailMessage(f: FixtureInput): GmailMessage {
   ];
   if (f.cc) headers.push({ name: "Cc", value: f.cc });
   if (f.listId) headers.push({ name: "List-Id", value: f.listId });
+  for (const [name, value] of Object.entries(f.headers ?? {})) headers.push({ name, value });
   const textPart = { mimeType: "text/plain", body: { data: b64(f.text ?? "本文") } };
   const parts: NonNullable<GmailMessage["payload"]>[] = [];
   if (f.html) parts.push({ mimeType: "text/html", body: { data: b64(f.html) } });

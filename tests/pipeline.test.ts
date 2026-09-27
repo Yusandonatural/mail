@@ -183,6 +183,57 @@ describe("受信メールの処理", () => {
   });
 });
 
+describe("一斉配信", () => {
+  it("個人アドレスに届いたメルマガは Claude を使わずニュースレターへ", async () => {
+    const db = await testDb();
+    const user = await makeUser(db);
+    const mail = new FakeMail();
+    mail.add(
+      gmailMessage({
+        id: "news",
+        from: "mail-info@diamond.co.jp",
+        to: "isozaki@yusando.com",
+        headers: { "List-Unsubscribe": "<mailto:unsub@diamond.co.jp>" },
+      }),
+    );
+    const classifier = new FakeClassifier();
+    await processMessage({ db, mail, classifier }, user, "news");
+    expect(classifier.calls).toHaveLength(0);
+    const [row] = await db.select().from(messages);
+    expect(row).toMatchObject({ folder: "info", needsReply: false, status: "done" });
+    expect(await db.select().from(jobs)).toHaveLength(0);
+  });
+
+  it("用途別アドレス宛ての一斉配信（請求システムなど）は通常どおり分類する", async () => {
+    const db = await testDb();
+    const user = await makeUser(db);
+    const mail = new FakeMail();
+    mail.add(
+      gmailMessage({ id: "inv", from: "billing@saas.example", to: "keiri@yusando.com", headers: { Precedence: "bulk" } }),
+    );
+    const classifier = new FakeClassifier({ category: "keiri", needs_reply: false });
+    await processMessage({ db, mail, classifier }, user, "inv");
+    expect(classifier.calls).toHaveLength(1);
+    const [row] = await db.select().from(messages);
+    expect(row.folder).toBe("keiri");
+  });
+
+  it("送信者ルールがあれば一斉配信でもルールに従う", async () => {
+    const db = await testDb();
+    const user = await makeUser(db);
+    await db.insert(rules).values({ kind: "domain", pattern: "jotform.com", folder: "tour" });
+    const mail = new FakeMail();
+    mail.add(
+      gmailMessage({ id: "form", from: "noreply@jotform.com", to: "isozaki@yusando.com", headers: { "List-Unsubscribe": "<x>" } }),
+    );
+    const classifier = new FakeClassifier({ category: "tour" });
+    await processMessage({ db, mail, classifier }, user, "form");
+    expect(classifier.calls).toHaveLength(1);
+    const [row] = await db.select().from(messages);
+    expect(row.folder).toBe("tour");
+  });
+});
+
 describe("消えたメッセージ", () => {
   it("Gmail に無いメッセージ（差し替えられた下書きなど）は失敗にせず飛ばす", async () => {
     const db = await testDb();
