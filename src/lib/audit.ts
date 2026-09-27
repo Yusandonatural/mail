@@ -16,7 +16,8 @@ export type AuditAction =
   | "trashed"
   | "settings_changed"
   | "user_changed"
-  | "backfill";
+  | "backfill"
+  | "freee_uploaded";
 
 export async function audit(
   db: Db,

@@ -168,3 +168,13 @@ export async function backfillAction(formData: FormData): Promise<void> {
   await audit(db, admin.id, "backfill", `${days}d`, { queued: n });
   done();
 }
+
+export async function saveNotifyAction(formData: FormData): Promise<void> {
+  const admin = await requireAdmin();
+  const mode = String(formData.get("mode"));
+  if (!["urgent", "replies", "off"].includes(mode)) throw new Error("通知の設定が正しくありません");
+  const db = await getDb();
+  await putSetting(db, "notify", { mode: mode as "urgent" | "replies" | "off" });
+  await audit(db, admin.id, "settings_changed", "notify", { mode });
+  done();
+}

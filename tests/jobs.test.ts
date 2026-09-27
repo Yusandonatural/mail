@@ -29,6 +29,7 @@ describe("ジョブキュー", () => {
           throw new PermanentJobError("ダメ");
         },
         collect_summary_batch: noop,
+        notify: noop,
       },
       5000,
     );
@@ -53,6 +54,7 @@ describe("ジョブキュー", () => {
         collect_summary_batch: async () => {
           throw new RetryLaterError(60_000);
         },
+        notify: noop,
       },
       5000,
     );

@@ -42,6 +42,32 @@ export type CalendarMap = Record<DateKind, string>;
 
 export type AutoDraftMap = Record<Folder, boolean>;
 
+/** freee 会計との連携（会社で1つ）。リフレッシュトークンは使うたびに変わるので必ず保存し直す */
+export interface FreeeSetting {
+  refreshTokenEnc: string | null;
+  companyId: number | null;
+  companyName: string | null;
+  companies: Array<{ id: number; name: string }>;
+  connectedBy: string | null;
+  connectedAt: string | null;
+}
+
+export const DEFAULT_FREEE: FreeeSetting = {
+  refreshTokenEnc: null,
+  companyId: null,
+  companyName: null,
+  companies: [],
+  connectedBy: null,
+  connectedAt: null,
+};
+
+/** 通知：urgent = 至急の要返信だけ、replies = 要返信すべて、off = 通知しない */
+export interface NotifySetting {
+  mode: "urgent" | "replies" | "off";
+}
+
+export const DEFAULT_NOTIFY: NotifySetting = { mode: "urgent" };
+
 export const DEFAULT_SIGNATURES: Signatures = {
   ja: [
     "─────────────",

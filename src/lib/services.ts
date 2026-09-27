@@ -13,6 +13,7 @@ import { generateDraft } from "./drafts";
 import { collectSummaries } from "./contacts";
 import { PermanentJobError, type JobHandlers } from "./jobs";
 import { orderLookupFromEnv } from "./shopify";
+import { notifyUser, pushConfigured, WebPushNotifier, type PushPayload } from "./notify";
 
 const classifier = new ClaudeClassifier();
 const drafter = new ClaudeDraftWriter();
@@ -55,6 +56,10 @@ export function jobHandlers(db: Db): JobHandlers {
       });
     },
     collect_summary_batch: async (p) => collectSummaries(db, p),
+    notify: async (p) => {
+      if (!pushConfigured()) return;
+      await notifyUser(db, new WebPushNotifier(), Number(p.userId), p as unknown as PushPayload);
+    },
   };
 }
 

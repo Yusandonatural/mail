@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx scripts/migrate.ts"
+    "db:migrate": "tsx scripts/migrate.ts",
+    "build:migrate": "esbuild scripts/migrate.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist/migrate.cjs --external:pg-native --log-level=warning"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
@@ -24,6 +25,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "server-only": "^0.0.1",
+    "web-push": "^3.6.7",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -32,7 +34,9 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/web-push": "^3.6.4",
     "drizzle-kit": "^0.31.11",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^5.0.2"

@@ -39,6 +39,7 @@ export const FILTER_LABELS: Record<ListFilter, string> = {
 
 export interface ListedMessage extends MessageRow {
   hasDates: boolean;
+  freeeSent: boolean;
 }
 
 function inFolder(folder: string): SQL {
@@ -61,17 +62,18 @@ export async function listMessages(
   // 外側の messages を明示的に参照する（列名だけだとサブクエリ側の列に解決されてしまう）
   const hasDates = sql<boolean>`exists (select 1 from date_candidates d where d.user_id = "messages"."user_id" and d.gmail_message_id = "messages"."gmail_message_id" and d.status in ('candidate', 'tentative'))`;
   if (opts.filter === "dates") conds.push(hasDates);
+  const freeeSent = sql<boolean>`exists (select 1 from freee_uploads f where f.gmail_message_id = "messages"."gmail_message_id" or (f.rfc_message_id is not null and f.rfc_message_id = "messages"."rfc_message_id"))`;
 
   // 要返信で緊急度の高いものを先頭に、あとは新しい順
   const hot = sql`case when ${messages.urgency} = 'high' and ${messages.status} in ('new', 'draft_ready') then 0 else 1 end`;
   const rows = await db
-    .select({ m: messages, hasDates })
+    .select({ m: messages, hasDates, freeeSent })
     .from(messages)
     .where(and(...conds))
     .orderBy(hot, desc(messages.receivedAt))
     .limit(size)
     .offset(opts.page * size);
-  return rows.map((r) => ({ ...r.m, hasDates: Boolean(r.hasDates) }));
+  return rows.map((r) => ({ ...r.m, hasDates: Boolean(r.hasDates), freeeSent: Boolean(r.freeeSent) }));
 }
 
 export async function threadCandidates(db: Db, userId: number, threadId: string) {

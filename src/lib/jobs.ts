@@ -3,7 +3,7 @@ import type { Db } from "./db";
 import { jobs } from "./db/schema";
 import { ClaudeRefusalError } from "./claude/client";
 
-export type JobKind = "process_message" | "generate_draft" | "collect_summary_batch";
+export type JobKind = "process_message" | "generate_draft" | "collect_summary_batch" | "notify";
 
 export interface ClaimedJob {
   id: number;

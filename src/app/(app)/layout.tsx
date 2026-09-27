@@ -6,6 +6,8 @@ import { folderName } from "@/lib/domain";
 import { folderCounts } from "@/lib/queries";
 import { NavLink } from "@/components/nav-link";
 import { KeyboardNav } from "@/components/keyboard-nav";
+import { NotifyToggle } from "@/components/notify-toggle";
+import { vapidPublicKey } from "@/lib/notify";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +53,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             </>
           ) : null}
         </Suspense>
+        {vapidPublicKey() ? <NotifyToggle publicKey={vapidPublicKey()!} /> : null}
         <div className="nav-section">{user.email}</div>
         <form action="/api/auth/logout" method="post" style={{ padding: "0 8px" }}>
           <button type="submit">ログアウト</button>

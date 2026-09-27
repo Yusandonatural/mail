@@ -221,3 +221,42 @@ export type DraftRow = typeof drafts.$inferSelect;
 export type DateCandidate = typeof dateCandidates.$inferSelect;
 export type Contact = typeof contacts.$inferSelect;
 export type Job = typeof jobs.$inferSelect;
+
+/** freee のファイルボックスに送った添付（二重送信を防ぐ） */
+export const freeeUploads = pgTable(
+  "freee_uploads",
+  {
+    id: serial("id").primaryKey(),
+    /** RFC の Message-ID（無ければ Gmail の ID）+ ファイル名。同じ請求書を複数人が送らないように */
+    dedupeKey: text("dedupe_key").notNull(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    gmailMessageId: text("gmail_message_id").notNull(),
+    rfcMessageId: text("rfc_message_id"),
+    filename: text("filename").notNull(),
+    receiptId: text("receipt_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("freee_uploads_dedupe").on(t.dedupeKey),
+    index("freee_uploads_msg").on(t.gmailMessageId),
+    index("freee_uploads_rfc").on(t.rfcMessageId),
+  ],
+);
+
+/** ブラウザ・スマホへの通知の宛先（Web Push） */
+export const pushSubscriptions = pgTable("push_subscriptions", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id),
+  endpoint: text("endpoint").notNull().unique(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  userAgent: text("user_agent").notNull().default(""),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type FreeeUpload = typeof freeeUploads.$inferSelect;
+export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect;

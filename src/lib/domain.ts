@@ -69,6 +69,7 @@ export const STATUS_LABELS = {
   draftReady: `${STATUS_LABEL_ROOT}/下書きあり`,
   needsReview: `${STATUS_LABEL_ROOT}/要確認`,
   done: `${STATUS_LABEL_ROOT}/対応済`,
+  freee: `${STATUS_LABEL_ROOT}/freee送信済`,
 } as const;
 
 export type StatusLabelKey = keyof typeof STATUS_LABELS;

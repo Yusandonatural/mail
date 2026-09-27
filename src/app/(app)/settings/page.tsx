@@ -28,7 +28,11 @@ import {
   saveRuleAction,
   saveSignaturesAction,
   saveUserAction,
+  saveNotifyAction,
 } from "@/app/actions/settings";
+import { disconnectFreeeAction, selectFreeeCompanyAction } from "@/app/actions/freee";
+import { freeeConfigured } from "@/lib/freee";
+import { pushConfigured } from "@/lib/notify";
 
 const WEEK = ["日", "月", "火", "水", "木", "金", "土"];
 
@@ -44,7 +48,8 @@ function FolderSelect({ name, value }: { name: string; value?: string }) {
   );
 }
 
-export default async function SettingsPage() {
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ freee?: string }> }) {
+  const { freee: freeeMessage } = await searchParams;
   const admin = await requireAdmin();
   const db = await getDb();
   const [addresses, ruleRows, userRows, playbookRows, logs, failedJobs] = await Promise.all([
@@ -60,12 +65,14 @@ export default async function SettingsPage() {
       rows: Array<{ n: number }>;
     }).rows[0]?.n ?? 0,
   );
-  const [signatures, hours, calendarMap, autoDraft, businessContext] = await Promise.all([
+  const [signatures, hours, calendarMap, autoDraft, businessContext, freee, notify] = await Promise.all([
     getSetting(db, "signatures"),
     getSetting(db, "businessHours"),
     getSetting(db, "calendarMap"),
     getSetting(db, "autoDraft"),
     getSetting(db, "businessContext"),
+    getSetting(db, "freee"),
+    getSetting(db, "notify"),
   ]);
   const calendars = await Promise.resolve()
     .then(() => calendarFor(admin).listCalendars())
@@ -344,6 +351,67 @@ export default async function SettingsPage() {
             <SubmitButton>保存</SubmitButton>
           </div>
         </form>
+      </div>
+
+      <div className="panel">
+        <h2>freee 会計</h2>
+        {freeeMessage ? <div className="notes">{freeeMessage}</div> : null}
+        {!freeeConfigured() ? (
+          <p className="meta">
+            FREEE_CLIENT_ID と FREEE_CLIENT_SECRET を設定すると連携できます（README を参照）。
+          </p>
+        ) : freee.refreshTokenEnc ? (
+          <div className="stack">
+            <p className="meta">
+              {freee.connectedBy} が連携しました。経理フォルダのメールから、請求書・領収書の添付を freee のファイルボックスに送れます。
+            </p>
+            <form action={selectFreeeCompanyAction} className="inline-form">
+              <div>
+                <label>送り先の事業所</label>
+                <select name="companyId" defaultValue={freee.companyId ?? undefined}>
+                  {freee.companies.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <SubmitButton>保存</SubmitButton>
+            </form>
+            <form action={disconnectFreeeAction}>
+              <SubmitButton className="danger">連携を解除</SubmitButton>
+            </form>
+          </div>
+        ) : (
+          <p>
+            <a className="button primary" href="/api/freee/connect" style={{ background: "var(--accent)", color: "#fff" }}>
+              freee と連携する
+            </a>
+          </p>
+        )}
+      </div>
+
+      <div className="panel">
+        <h2>通知</h2>
+        {!pushConfigured() ? (
+          <p className="meta">VAPID の鍵を設定すると、スマホやパソコンに通知できます（README を参照）。</p>
+        ) : (
+          <form action={saveNotifyAction} className="stack">
+            <p className="meta">各自がメニューの「通知を受け取る」を押した端末に届きます。</p>
+            <div>
+              <label className="inline">
+                <input type="radio" name="mode" value="urgent" defaultChecked={notify.mode === "urgent"} /> 至急の要返信だけ
+              </label>
+              <label className="inline">
+                <input type="radio" name="mode" value="replies" defaultChecked={notify.mode === "replies"} /> 要返信すべて
+              </label>
+              <label className="inline">
+                <input type="radio" name="mode" value="off" defaultChecked={notify.mode === "off"} /> 通知しない
+              </label>
+            </div>
+            <SubmitButton>保存</SubmitButton>
+          </form>
+        )}
       </div>
 
       <div className="panel">

@@ -27,6 +27,11 @@ import { HtmlFrame } from "@/components/html-frame";
 import { DraftCreate, DraftEditor, type DraftView } from "@/components/draft-editor";
 import { SubmitButton } from "@/components/submit-button";
 import { formatAmount } from "@/components/message-row";
+import { FreeePanel } from "@/components/freee-panel";
+import { canSeeFolder } from "@/lib/access";
+import { FREEE_RECEIPT_TYPES } from "@/lib/freee";
+import { uploadKey, uploadsFor } from "@/lib/freee-service";
+import { getSetting } from "@/lib/settings";
 import { archiveAction, markReviewed, moveFolder, saveContactAction } from "@/app/actions/mail";
 import { confirmEventAction, createEventAction, ignoreCandidateAction } from "@/app/actions/calendar";
 
@@ -116,6 +121,17 @@ export default async function MessagePage({
   const senderRules = (await db.select().from(rules)).filter(
     (r) => (r.kind === "sender" && r.pattern === row.fromEmail) || (r.kind === "domain" && (domain === r.pattern || domain.endsWith(`.${r.pattern}`))),
   );
+
+  // freee：経理のメールで、PDF か画像の添付があり、freee と連携しているとき
+  const freeeSetting = await getSetting(db, "freee");
+  const target = thread.find((m) => m.id === row.gmailMessageId);
+  const receiptFiles = (target?.attachments ?? []).filter((a) => FREEE_RECEIPT_TYPES.has(a.mimeType));
+  const showFreee =
+    Boolean(freeeSetting.refreshTokenEnc && freeeSetting.companyId) &&
+    canSeeFolder(user, "keiri") &&
+    (row.folder === "keiri" || row.secondaryFolders.includes("keiri")) &&
+    receiptFiles.length > 0;
+  const sent = showFreee ? new Map((await uploadsFor(db, row)).map((u) => [u.dedupeKey, u.receiptId])) : new Map();
 
   const category = row.category && isCategory(row.category) ? CATEGORY_LABELS[row.category] : null;
   const clientId = process.env.GOOGLE_CLIENT_ID ?? "";
@@ -389,6 +405,18 @@ export default async function MessagePage({
                 );
               })}
             </div>
+          ) : null}
+
+          {showFreee ? (
+            <FreeePanel
+              rowId={row.id}
+              companyName={freeeSetting.companyName ?? ""}
+              attachments={receiptFiles.map((a) => ({
+                partId: a.partId,
+                filename: a.filename,
+                receiptId: sent.get(uploadKey(row, a.filename)) ?? null,
+              }))}
+            />
           ) : null}
 
           <div className="panel">

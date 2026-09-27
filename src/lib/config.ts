@@ -30,7 +30,8 @@ export function config(): AppConfig {
   }
   cached = {
     ...parsed.data,
-    adminEmails: parsed.data.ADMIN_EMAILS.split(",")
+    // Cloud Build 経由ではカンマが使えないのでセミコロン区切りも受け付ける
+    adminEmails: parsed.data.ADMIN_EMAILS.split(/[,;]/)
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean),
   };

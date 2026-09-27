@@ -226,6 +226,26 @@ export async function processMessage(
     }
   }
 
+  // 通知：既定は「至急の要返信」だけ。過去メールの取り込みでは鳴らさない
+  if (needsReply && visible && opts.autoDraft !== false) {
+    const notify = await getSetting(db, "notify");
+    const urgent = content?.urgency === "high";
+    if (notify.mode === "replies" || (notify.mode === "urgent" && urgent)) {
+      await enqueue(
+        db,
+        "notify",
+        {
+          userId: user.id,
+          title: `${urgent ? "【至急】" : ""}${msg.from.name || msg.from.email}`,
+          body: content?.summary || msg.subject,
+          url: `/m/${messageRowId}`,
+          tag: `msg-${messageRowId}`,
+        },
+        `notify:${user.id}:${msg.id}`,
+      );
+    }
+  }
+
   return { kind: "classified", messageRowId, merged, draftQueued };
 }
 

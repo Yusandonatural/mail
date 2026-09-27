@@ -7,6 +7,10 @@ import {
   DEFAULT_BUSINESS_HOURS,
   DEFAULT_CALENDAR_MAP,
   DEFAULT_SIGNATURES,
+  DEFAULT_FREEE,
+  DEFAULT_NOTIFY,
+  type FreeeSetting,
+  type NotifySetting,
   type AutoDraftMap,
   type BusinessHours,
   type CalendarMap,
@@ -19,6 +23,8 @@ interface SettingTypes {
   calendarMap: CalendarMap;
   autoDraft: AutoDraftMap;
   businessContext: string;
+  freee: FreeeSetting;
+  notify: NotifySetting;
 }
 
 const DEFAULTS: SettingTypes = {
@@ -27,6 +33,8 @@ const DEFAULTS: SettingTypes = {
   calendarMap: DEFAULT_CALENDAR_MAP,
   autoDraft: DEFAULT_AUTO_DRAFT,
   businessContext: DEFAULT_BUSINESS_CONTEXT,
+  freee: DEFAULT_FREEE,
+  notify: DEFAULT_NOTIFY,
 };
 
 export type SettingKey = keyof SettingTypes;

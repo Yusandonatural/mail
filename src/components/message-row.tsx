@@ -26,6 +26,7 @@ export function MessageRowView({ m, keiri, showFolder }: { m: ListedMessage; kei
           {m.hasDates ? <span className="badge date">日程あり</span> : null}
           {m.language !== "ja" ? <span className="badge">{LANGUAGE_LABELS[m.language as Language] ?? m.language}</span> : null}
           {m.hasAttachments ? <span className="badge">添付</span> : null}
+          {m.freeeSent ? <span className="badge draft">freee済</span> : null}
           {showFolder && isFolder(m.folder) ? <span className="badge">{folderName(m.folder)}</span> : null}
           {!keiri && m.amount !== null ? <span className="badge">{formatAmount(m.amount, m.currency)}</span> : null}
         </div>

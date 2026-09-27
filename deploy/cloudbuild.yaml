@@ -1,0 +1,44 @@
+# Cloud Build：コンテナを作り、Cloud Run にデプロイする。deploy/setup-gcp.sh deploy から呼ぶ。
+# 任意の秘密の値（freee・Shopify・通知）は Secret Manager にあるときだけ渡す。
+substitutions:
+  _REGION: asia-northeast1
+  _SERVICE: yusando-mail
+  _APP_URL: ""
+  _DOMAIN: yusando.com
+  _ADMINS: ""
+  _SQL: ""
+  _TOPIC: ""
+  _PUSH_SA: ""
+  _RUN_SA: ""
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args: ["build", "-t", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_SERVICE}/app:${BUILD_ID}", "."]
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_SERVICE}/app:${BUILD_ID}"]
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        secrets="DATABASE_URL=DATABASE_URL:latest,SESSION_SECRET=SESSION_SECRET:latest,TOKEN_ENCRYPTION_KEY=TOKEN_ENCRYPTION_KEY:latest,CRON_SECRET=CRON_SECRET:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest"
+        for s in FREEE_CLIENT_ID FREEE_CLIENT_SECRET SHOPIFY_STORE_DOMAIN SHOPIFY_ADMIN_TOKEN VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY; do
+          if gcloud secrets describe "$$s" >/dev/null 2>&1; then secrets="$$secrets,$$s=$$s:latest"; fi
+        done
+        gcloud run deploy "${_SERVICE}" \
+          --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_SERVICE}/app:${BUILD_ID}" \
+          --region "${_REGION}" \
+          --service-account "${_RUN_SA}" \
+          --allow-unauthenticated \
+          --timeout 300 \
+          --memory 1Gi \
+          --max-instances 3 \
+          --add-cloudsql-instances "${_SQL}" \
+          --set-secrets "$$secrets" \
+          --set-env-vars "^|^APP_BASE_URL=${_APP_URL}|ALLOWED_DOMAIN=${_DOMAIN}|ADMIN_EMAILS=${_ADMINS}|GMAIL_PUBSUB_TOPIC=${_TOPIC}|PUBSUB_PUSH_SERVICE_ACCOUNT=${_PUSH_SA}"
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1800s

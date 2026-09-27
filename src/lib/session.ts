@@ -65,19 +65,20 @@ export async function requireAdmin(): Promise<User> {
 
 export const OAUTH_STATE_COOKIE = "ym_oauth_state";
 
-export async function setOAuthState(state: string): Promise<void> {
+/** OAuth の state を一時的にクッキーへ。path はコールバックのある場所（/api/auth, /api/freee） */
+export async function setOAuthState(state: string, path = "/api/auth"): Promise<void> {
   (await cookies()).set(OAUTH_STATE_COOKIE, state, {
     httpOnly: true,
     secure: secureCookies(),
     sameSite: "lax",
-    path: "/api/auth",
+    path,
     maxAge: 600,
   });
 }
 
-export async function takeOAuthState(): Promise<string | null> {
+export async function takeOAuthState(path = "/api/auth"): Promise<string | null> {
   const store = await cookies();
   const value = store.get(OAUTH_STATE_COOKIE)?.value ?? null;
-  store.delete(OAUTH_STATE_COOKIE);
+  store.delete({ name: OAUTH_STATE_COOKIE, path });
   return value;
 }
