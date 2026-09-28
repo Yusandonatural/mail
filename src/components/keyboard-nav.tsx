@@ -27,11 +27,9 @@ export function KeyboardNav() {
       switch (ev.key) {
         case "j":
           if (rows.length) select(current + 1);
-          else document.querySelector<HTMLAnchorElement>("a[data-next]")?.click();
           break;
         case "k":
           if (rows.length) select(current < 0 ? 0 : current - 1);
-          else document.querySelector<HTMLAnchorElement>("a[data-prev]")?.click();
           break;
         case "o":
         case "Enter":

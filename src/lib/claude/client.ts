@@ -26,3 +26,13 @@ export function asData(tag: string, text: string): string {
   const safe = text.replaceAll(`</${tag}>`, `</ ${tag}>`);
   return `<${tag}>\n${safe}\n</${tag}>`;
 }
+
+/** 時間をおけば通る失敗（混雑・一時的な障害・通信エラー）か。ジョブを失敗扱いにせず再試行させる */
+export function isRetryableApiError(err: unknown): boolean {
+  if (err instanceof Anthropic.APIConnectionError) return true;
+  if (err instanceof Anthropic.APIError) {
+    const status = err.status ?? 0;
+    return status === 408 || status === 409 || status === 429 || status >= 500;
+  }
+  return false;
+}

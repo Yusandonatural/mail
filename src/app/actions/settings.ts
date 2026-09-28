@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { addressMap, playbooks, rules, users } from "@/lib/db/schema";
@@ -10,7 +11,7 @@ import { putSetting, getSetting } from "@/lib/settings";
 import type { CalendarMap } from "@/lib/db/seed";
 import { requireAdmin } from "@/lib/session";
 import { mailFor } from "@/lib/services";
-import { backfill } from "@/lib/sync";
+import { backfill, requeueUnclassified } from "@/lib/sync";
 
 const done = () => revalidatePath("/settings");
 
@@ -119,7 +120,7 @@ export async function saveBusinessHoursAction(formData: FormData): Promise<void>
     days: formData.getAll("days").map(Number).filter((n) => n >= 0 && n <= 6),
     start: String(formData.get("start") ?? "09:00"),
     end: String(formData.get("end") ?? "17:00"),
-    slotMinutes: Math.max(15, Number(formData.get("slotMinutes") ?? 60)),
+    slotMinutes: Math.max(15, Number(formData.get("slotMinutes")) || 60),
   };
   await putSetting(db, "businessHours", value);
   await audit(db, admin.id, "settings_changed", "businessHours", value);
@@ -152,10 +153,20 @@ export async function saveUserAction(formData: FormData): Promise<void> {
   const active = formData.get("active") !== "off";
   if (email === admin.email && (role !== "admin" || !active)) throw new Error("自分の管理者権限は外せません");
   const db = await getDb();
-  await db
-    .insert(users)
-    .values({ email, role, visibleFolders: visible, active })
-    .onConflictDoUpdate({ target: users.email, set: { role, visibleFolders: visible, active } });
+  if (formData.get("mode") === "add") {
+    // 追加フォームから既存の人を上書きしない
+    const added = await db
+      .insert(users)
+      .values({ email, role, visibleFolders: visible, active: true })
+      .onConflictDoNothing()
+      .returning({ id: users.id });
+    if (!added.length) throw new Error(`${email} は既に登録されています。一覧の方で変更してください`);
+  } else {
+    await db
+      .update(users)
+      .set({ role, visibleFolders: visible, active })
+      .where(eq(users.email, email));
+  }
   await audit(db, admin.id, "user_changed", email, { role, visible, active });
   done();
 }
@@ -167,6 +178,7 @@ export async function backfillAction(formData: FormData): Promise<void> {
   const n = await backfill(db, mailFor(admin), admin, days);
   await audit(db, admin.id, "backfill", `${days}d`, { queued: n });
   done();
+  redirect(`/settings?backfill=${n}#backfill`);
 }
 
 export async function saveNotifyAction(formData: FormData): Promise<void> {
@@ -177,4 +189,13 @@ export async function saveNotifyAction(formData: FormData): Promise<void> {
   await putSetting(db, "notify", { mode: mode as "urgent" | "replies" | "off" });
   await audit(db, admin.id, "settings_changed", "notify", { mode });
   done();
+}
+
+export async function reclassifyAction(): Promise<void> {
+  const admin = await requireAdmin();
+  const db = await getDb();
+  const n = await requeueUnclassified(db, admin);
+  await audit(db, admin.id, "backfill", "reclassify", { queued: n });
+  done();
+  redirect(`/settings?backfill=${n}#backfill`);
 }

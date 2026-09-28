@@ -1,7 +1,8 @@
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { CATEGORY_LABELS, CATEGORIES } from "../domain";
 import {
-  ContentClassificationSchema,
+  normalizeClassification,
+  RawClassificationSchema,
   type Classifier,
   type ClassifierInput,
   type ContentClassification,
@@ -60,12 +61,12 @@ export class ClaudeClassifier implements Classifier {
       max_tokens: 2048,
       system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: user }],
-      output_config: { format: zodOutputFormat(ContentClassificationSchema) },
+      output_config: { format: zodOutputFormat(RawClassificationSchema) },
     });
     if (response.stop_reason === "refusal") {
       throw new ClaudeRefusalError(response.stop_details?.category ?? "分類");
     }
     if (!response.parsed_output) throw new Error("分類結果を読み取れませんでした");
-    return response.parsed_output;
+    return normalizeClassification(response.parsed_output);
   }
 }

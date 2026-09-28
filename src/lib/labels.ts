@@ -24,9 +24,18 @@ export class LabelResolver {
     if (existing) return existing;
     const slash = name.lastIndexOf("/");
     if (slash > 0) await this.id(name.slice(0, slash));
-    const created = await this.mail.createLabel(name);
-    map.set(created.name, created.id);
-    return created.id;
+    try {
+      const created = await this.mail.createLabel(name);
+      map.set(created.name, created.id);
+      return created.id;
+    } catch (err) {
+      // 別の処理が同時に同じラベルを作っていた（409）ときは、一覧を取り直してそれを使う
+      const labels = await this.mail.listLabels();
+      this.byName = new Map(labels.map((l) => [l.name, l.id]));
+      const found = this.byName.get(name);
+      if (found) return found;
+      throw err;
+    }
   }
 
   async folderId(folder: Folder): Promise<string> {

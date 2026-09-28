@@ -87,7 +87,8 @@ export async function createEventFromCandidate(
     start: edits.allDay ? jstDateString(start) : jstIso(start),
     end: endFor(edits, start),
     allDay: edits.allDay,
-    attendees: row && candidate.kind !== "payment_due" ? [row.fromEmail] : [],
+    // 相手を参加者に入れると、相手のカレンダーに内部のメモ付きの予定が見えてしまうため入れない
+    attendees: [],
     reminderMinutes: candidate.kind === "payment_due" ? PAYMENT_REMINDER_MINUTES : null,
   });
   await db

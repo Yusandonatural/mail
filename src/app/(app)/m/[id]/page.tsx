@@ -17,7 +17,7 @@ import {
 } from "@/lib/domain";
 import { calendarFor, mailFor } from "@/lib/services";
 import { parseMessage, type ParsedMessage } from "@/lib/mail/parse";
-import { threadCandidates, threadDrafts } from "@/lib/queries";
+import { safeBack, threadCandidates, threadDrafts } from "@/lib/queries";
 import { defaultEdits, eventsForDays, gmailThreadLink } from "@/lib/calendar-service";
 import { formatJst, jstIso, parseDateish } from "@/lib/time";
 import { draftText } from "@/lib/drafts";
@@ -47,10 +47,11 @@ export default async function MessagePage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ images?: string }>;
+  searchParams: Promise<{ images?: string; back?: string }>;
 }) {
   const { id } = await params;
-  const { images } = await searchParams;
+  const { images, back: backParam } = await searchParams;
+  if (!/^\d{1,9}$/.test(id)) notFound();
   const user = await requireUser();
   const db = await getDb();
   const row = (
@@ -61,8 +62,8 @@ export default async function MessagePage({
       .limit(1)
   )[0];
   if (!row || !canSeeMessage(user, row)) notFound();
-  const back = `/inbox?folder=${row.folder}`;
-  const self = `/m/${row.id}`;
+  const back = safeBack(backParam);
+  const self = `/m/${row.id}?back=${encodeURIComponent(back)}`;
 
   let thread: ParsedMessage[] = [];
   let loadError: string | null = null;
@@ -140,7 +141,7 @@ export default async function MessagePage({
     <>
       <div className="topbar">
         <Link href={back} data-back>
-          ← {isFolder(row.folder) ? folderName(row.folder) : "受信箱"}
+          ← 一覧に戻る
         </Link>
         <div className="actions">
           <Link className="button" href={`/compose?forward=${row.id}`}>
@@ -149,16 +150,19 @@ export default async function MessagePage({
           <form action={archiveAction}>
             <input type="hidden" name="rowId" value={row.id} />
             <input type="hidden" name="kind" value="archive" />
+            <input type="hidden" name="back" value={back} />
             <SubmitButton data-archive>アーカイブ（e）</SubmitButton>
           </form>
           <form action={archiveAction}>
             <input type="hidden" name="rowId" value={row.id} />
             <input type="hidden" name="kind" value="spam" />
+            <input type="hidden" name="back" value={back} />
             <SubmitButton className="danger">迷惑メール</SubmitButton>
           </form>
           <form action={archiveAction}>
             <input type="hidden" name="rowId" value={row.id} />
             <input type="hidden" name="kind" value="trash" />
+            <input type="hidden" name="back" value={back} />
             <SubmitButton className="danger">ゴミ箱</SubmitButton>
           </form>
         </div>
@@ -277,7 +281,7 @@ export default async function MessagePage({
             })}
             {thread.some((m) => m.html) && images !== "1" ? (
               <p className="meta">
-                外部の画像は表示していません。<Link href={`${self}?images=1`}>画像を表示</Link>
+                外部の画像は表示していません。<Link href={`${self}&images=1`}>画像を表示</Link>
               </p>
             ) : null}
             <p className="meta">
@@ -292,7 +296,7 @@ export default async function MessagePage({
           {loadError ? null : draftViews.length ? (
             draftViews.map((d, i) => (
               <DraftEditor
-                key={d.id}
+                key={`${d.id}-${d.version}-${d.gmailMessageId}`}
                 draft={d}
                 rowId={row.id}
                 clientId={clientId}

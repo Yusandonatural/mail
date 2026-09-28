@@ -45,8 +45,9 @@ export function NotifyToggle({ publicKey }: { publicKey: string }) {
     setState("busy");
     setError(null);
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js");
+      // iPhone ではクリック直後に許可を求めないと断られるので、登録より先に聞く
       const perm = await Notification.requestPermission();
+      const reg = await navigator.serviceWorker.register("/sw.js");
       if (perm !== "granted") return setState(perm === "denied" ? "denied" : "off");
       const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyToBytes(publicKey) });
       await savePushSubscription({

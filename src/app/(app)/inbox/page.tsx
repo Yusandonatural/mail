@@ -21,7 +21,9 @@ export default async function InboxPage({
   const filter: ListFilter = FILTERS.includes(sp.filter as ListFilter) ? (sp.filter as ListFilter) : "all";
   const page = Math.max(0, Number(sp.page ?? 0) || 0);
   const db = await getDb();
-  const rows = await listMessages(db, user, { folder, filter, page });
+  const fetched = await listMessages(db, user, { folder, filter, page });
+  const hasMore = fetched.length > 50;
+  const rows = fetched.slice(0, 50);
   const keiri = folder === "keiri";
   const qs = (over: Record<string, string | number | null>) => {
     const p = new URLSearchParams();
@@ -35,6 +37,7 @@ export default async function InboxPage({
     <>
       <div className="topbar">
         <h1>{folder ? folderName(folder) : "受信箱（全て）"}</h1>
+        {!folder ? <span className="meta">ニュースレターは「情報・ニュースレター」フォルダにあります</span> : null}
         <div className="filters">
           {FILTERS.map((f) => (
             <Link key={f} href={qs({ filter: f === "all" ? null : f })} className={f === filter ? "active" : undefined}>
@@ -45,7 +48,7 @@ export default async function InboxPage({
       </div>
       <div className="list">
         {rows.length ? (
-          rows.map((m) => <MessageRowView key={m.id} m={m} keiri={keiri} showFolder={!folder} />)
+          rows.map((m) => <MessageRowView key={m.id} m={m} keiri={keiri} showFolder={!folder} back={qs({ page: page || null })} />)
         ) : (
           <div className="empty">このフォルダにメールはありません</div>
         )}
@@ -54,7 +57,7 @@ export default async function InboxPage({
         <span className="kbd">j / k で移動、Enter で開く、/ で検索</span>
         <span className="actions">
           {page > 0 ? <Link href={qs({ page: page - 1 })}>← 新しいメール</Link> : null}
-          {rows.length === 50 ? <Link href={qs({ page: page + 1 })}>古いメール →</Link> : null}
+          {hasMore ? <Link href={qs({ page: page + 1 })}>古いメール →</Link> : null}
         </span>
       </div>
     </>

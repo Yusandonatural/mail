@@ -20,14 +20,18 @@ export function ComposeForm({
   defaults,
   fromOptions,
   clientId,
+  userEmail,
 }: {
   defaults: ComposeDefaults;
   fromOptions: Array<{ email: string; name: string | null }>;
   clientId: string;
+  userEmail: string;
 }) {
+  const [draftId, setDraftId] = useState<string | null>(null);
   const router = useRouter();
   const [v, setV] = useState(defaults);
   const [includeAttachments, setInclude] = useState(true);
+  const [saved, setSaved] = useState<string | null>(null);
   const placeholders = useMemo(() => findPlaceholders(v.text), [v.text]);
   const set = (k: keyof ComposeDefaults) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
     setV({ ...v, [k]: e.target.value });
@@ -70,9 +74,10 @@ export function ComposeForm({
       <div className="actions">
         <SendButton
           clientId={clientId}
+          email={userEmail}
           disabled={placeholders.length > 0 || !v.to.trim()}
-          prepare={() =>
-            createComposeDraft({
+          prepare={async () => {
+            const r = await createComposeDraft({
               from: v.from,
               to: v.to,
               cc: v.cc,
@@ -80,8 +85,11 @@ export function ComposeForm({
               text: v.text,
               forwardRowId: v.forwardRowId,
               includeAttachments,
-            })
-          }
+              existingDraftId: draftId,
+            });
+            if (r.ok && r.data) setDraftId(r.data.gmailDraftId);
+            return r;
+          }}
           after={async (sent) => {
             await recordComposeSent(sent.gmailDraftId, v.subject);
             router.push("/inbox");
@@ -99,12 +107,15 @@ export function ComposeForm({
               forwardRowId: v.forwardRowId,
               includeAttachments,
               saveOnly: true,
+              existingDraftId: draftId,
             });
-            alert(r.ok ? "Gmail の下書きに保存しました" : r.error);
+            if (r.ok && r.data) setDraftId(r.data.gmailDraftId);
+            setSaved(r.ok ? "Gmail の下書きに保存しました" : r.error);
           }}
         >
           下書きに保存
         </button>
+        {saved ? <span className="meta">{saved}</span> : null}
       </div>
     </div>
   );

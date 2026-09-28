@@ -55,7 +55,8 @@ export async function listMessages(
   const visible = visibleFolders(user);
   const conds: SQL[] = [eq(messages.userId, user.id), sql`${messages.status} <> 'skipped'`];
   if (opts.folder) conds.push(inFolder(opts.folder));
-  else conds.push(or(...visible.map(inFolder))!);
+  // 「受信箱（全て）」にはニュースレターを出さない（受信の約8割を占めるため）
+  else conds.push(or(...visible.filter((f) => f !== "info").map(inFolder))!, sql`${messages.folder} <> 'info'`);
   if (opts.filter === "reply") conds.push(and(eq(messages.needsReply, true), inArray(messages.status, ["new", "draft_ready"]))!);
   if (opts.filter === "draft") conds.push(eq(messages.status, "draft_ready"));
   if (opts.filter === "review") conds.push(eq(messages.needsReview, true));
@@ -71,7 +72,7 @@ export async function listMessages(
     .from(messages)
     .where(and(...conds))
     .orderBy(hot, desc(messages.receivedAt))
-    .limit(size)
+    .limit(size + 1)
     .offset(opts.page * size);
   return rows.map((r) => ({ ...r.m, hasDates: Boolean(r.hasDates), freeeSent: Boolean(r.freeeSent) }));
 }
@@ -90,4 +91,27 @@ export async function threadDrafts(db: Db, userId: number, threadId: string) {
     .from(drafts)
     .where(and(eq(drafts.userId, userId), eq(drafts.gmailThreadId, threadId), eq(drafts.status, "ready")))
     .orderBy(desc(drafts.createdAt), desc(drafts.id));
+}
+
+/** 要返信の件数（副ラベルで複数のフォルダに出るメールも1通として数える） */
+export async function totalReplyCount(db: Db, user: User): Promise<number> {
+  const visible = visibleFolders(user).filter((f) => f !== "info");
+  const rows = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.userId, user.id),
+        eq(messages.needsReply, true),
+        inArray(messages.status, ["new", "draft_ready"]),
+        or(...visible.map(inFolder))!,
+      ),
+    );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** 一覧からメールを開いたときの「戻る」先。自分のアプリ内の一覧だけを許す */
+export function safeBack(value: string | undefined | null): string {
+  if (value && /^\/(inbox|search|today)(\?|$)/.test(value)) return value;
+  return "/inbox";
 }

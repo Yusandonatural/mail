@@ -54,9 +54,14 @@ export async function notifyUser(db: Db, notifier: Notifier, userId: number, pay
   const subs = await db.select().from(pushSubscriptions).where(eq(pushSubscriptions.userId, userId));
   let sent = 0;
   for (const sub of subs) {
-    const r = await notifier.send(sub, payload);
-    if (r === "gone") await db.delete(pushSubscriptions).where(eq(pushSubscriptions.id, sub.id));
-    else sent++;
+    // 1台で失敗しても、ほかの端末には送る
+    try {
+      const r = await notifier.send(sub, payload);
+      if (r === "gone") await db.delete(pushSubscriptions).where(eq(pushSubscriptions.id, sub.id));
+      else sent++;
+    } catch (err) {
+      console.error("push failed", sub.endpoint, err);
+    }
   }
   return sent;
 }

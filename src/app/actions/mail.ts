@@ -17,6 +17,7 @@ import { draftDeps, mailFor, pipelineDeps } from "@/lib/services";
 import { getSetting } from "@/lib/settings";
 import { bodyHash } from "@/lib/crypto";
 import { requireUser } from "@/lib/session";
+import { safeBack } from "@/lib/queries";
 import { errorResult, ownMessage, type ActionResult } from "./common";
 
 /** フォルダを直す。「今後もこの送信者／ドメインは」を選べば学習ルールとして保存する（仕様書 4章） */
@@ -100,10 +101,12 @@ export async function emptyReplyAction(rowId: number): Promise<ActionResult> {
     const db = await getDb();
     const mail = mailFor(user);
     const target = parseMessage(await mail.getMessage(row.gmailMessageId));
+    const to = target.replyTo ?? target.from;
+    if (!to) return { ok: false, error: "返信先のアドレスが見つかりません" };
     const sigs = await getSetting(db, "signatures");
     const text = `\n\n${row.language === "ja" ? sigs.ja : sigs.en}`;
     const raw = buildMime({
-      to: [target.replyTo ?? target.from!],
+      to: [to],
       subject: replySubject(target.subject),
       text,
       inReplyTo: target.messageIdHeader,
@@ -220,7 +223,7 @@ export async function archiveAction(formData: FormData): Promise<void> {
     .update(messages)
     .set({ status: kind === "archive" ? "done" : "skipped", needsReply: false })
     .where(eq(messages.id, row.id));
-  redirect(`/inbox?folder=${encodeURIComponent(row.folder)}`);
+  redirect(safeBack(String(formData.get("back") ?? "")));
 }
 
 export async function saveContactAction(formData: FormData): Promise<void> {
@@ -238,7 +241,7 @@ export async function saveContactAction(formData: FormData): Promise<void> {
     .onConflictDoUpdate({ target: contacts.email, set: { ...values, updatedAt: new Date() } });
   await audit(db, user.id, "settings_changed", `contact:${email}`);
   const back = String(formData.get("back") ?? "");
-  if (back.startsWith("/")) revalidatePath(back);
+  if (back.startsWith("/")) revalidatePath(back.split("?")[0]);
 }
 
 /** 検索で見つけた、まだ分類していないメールを取り込む */

@@ -243,6 +243,8 @@ export async function saveDraftText(
   const current = await mail.getDraft(draftId);
   if (!current) throw new Error("下書きが Gmail に見つかりません（送信済みか削除済み）");
   const m = parseMessage(current.message);
+  // 本文が変わっていなければ作り直さない（Gmail の画面で足した添付や書式を消さないため）
+  if (draftText(m) === text.replace(/\r\n/g, "\n").trim()) return;
   const header = (name: string) =>
     current.message.payload?.headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? null;
   const inReplyTo = header("In-Reply-To");

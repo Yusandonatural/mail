@@ -70,6 +70,7 @@ export function DraftEditor({
       <div className="actions">
         <SendButton
           clientId={clientId}
+          email={userEmail}
           disabled={placeholders.length > 0 || pending}
           prepare={() => prepareSendAction(draft.id, text)}
           after={async () => {

@@ -1,6 +1,7 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull, notInArray } from "drizzle-orm";
 import type { Db } from "./db";
-import { messages, users, type User } from "./db/schema";
+import { dateCandidates, messages, users, type User } from "./db/schema";
+import { folderLabelName, isFolder, STATUS_LABELS } from "./domain";
 import { HistoryExpiredError, type MailApi } from "./google/mail-api";
 import { enqueue } from "./jobs";
 
@@ -68,8 +69,72 @@ export async function syncUser(db: Db, mail: MailApi, user: User): Promise<numbe
   }
 }
 
+/** 取り込みの上限。受信トレイの 90 日分（約 1 万通）が収まる大きさ */
+export const BACKFILL_MAX = 15000;
+
 /** 過去のメールをさかのぼって分類する（管理画面から実行） */
 export async function backfill(db: Db, mail: MailApi, user: User, days: number): Promise<number> {
-  const ids = await mail.listMessageIds(`newer_than:${Math.max(1, Math.floor(days))}d in:inbox`, 2000);
+  const ids = await mail.listMessageIds(`newer_than:${Math.max(1, Math.floor(days))}d in:inbox`, BACKFILL_MAX);
   return enqueueMessages(db, user, ids, true);
+}
+
+/**
+ * Claude で分類できていないメール（分類に失敗したもの・一斉配信として分類を省いたもの）を分類し直す。
+ * 人が直したものとルールで決まったものは触らない。Gmail の古いラベルはジョブの中で外す。
+ */
+export async function countUnclassified(db: Db, user: User): Promise<number> {
+  const rows = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.userId, user.id),
+        isNull(messages.confidence),
+        notInArray(messages.source, ["sender_rule", "domain_rule", "manual"]),
+      ),
+    );
+  return rows.length;
+}
+
+export async function requeueUnclassified(db: Db, user: User, now = new Date()): Promise<number> {
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.userId, user.id),
+        isNull(messages.confidence),
+        notInArray(messages.source, ["sender_rule", "domain_rule", "manual"]),
+      ),
+    );
+  let n = 0;
+  const stamp = now.getTime().toString(36);
+  for (const row of rows) {
+    const removeLabels = [
+      ...[row.folder, ...row.secondaryFolders].filter(isFolder).map(folderLabelName),
+      STATUS_LABELS.needsReview,
+      STATUS_LABELS.needsReply,
+    ];
+    await db.transaction(async (txRaw) => {
+      const tx = txRaw as unknown as Db;
+      await tx
+        .delete(dateCandidates)
+        .where(
+          and(
+            eq(dateCandidates.userId, user.id),
+            eq(dateCandidates.gmailMessageId, row.gmailMessageId),
+            eq(dateCandidates.status, "candidate"),
+          ),
+        );
+      await tx.delete(messages).where(eq(messages.id, row.id));
+      await enqueue(
+        tx,
+        "process_message",
+        { userId: user.id, messageId: row.gmailMessageId, backfill: true, removeLabels },
+        `reclassify:${user.id}:${row.gmailMessageId}:${stamp}`,
+      );
+    });
+    n++;
+  }
+  return n;
 }

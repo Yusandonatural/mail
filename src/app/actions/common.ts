@@ -1,4 +1,5 @@
 import "server-only";
+import { unstable_rethrow } from "next/navigation";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { messages, type MessageRow, type User } from "@/lib/db/schema";
@@ -22,6 +23,8 @@ export async function ownMessage(rowId: number): Promise<{ user: User; row: Mess
 export type ActionResult<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
 
 export function errorResult(err: unknown): { ok: false; error: string } {
+  // ログイン切れの redirect() などは、エラーにせずそのまま Next.js に渡す
+  unstable_rethrow(err);
   console.error(err);
   return { ok: false, error: err instanceof Error ? err.message : "処理に失敗しました" };
 }

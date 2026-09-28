@@ -6,7 +6,8 @@ import { ClaudeDraftWriter } from "./claude/drafter";
 import { GoogleMailApi } from "./google/gmail";
 import { GoogleCalendarApi } from "./google/calendar";
 import { clientForRefreshToken } from "./google/oauth";
-import type { MailApi } from "./google/mail-api";
+import { MessageNotFoundError, type MailApi } from "./google/mail-api";
+import { LabelResolver } from "./labels";
 import type { CalendarApi } from "./google/calendar-api";
 import { processMessage } from "./pipeline";
 import { generateDraft } from "./drafts";
@@ -46,7 +47,20 @@ export function jobHandlers(db: Db): JobHandlers {
   return {
     process_message: async (p) => {
       const user = await loadUser(db, p.userId);
-      await processMessage(pipelineDeps(db, user), user, String(p.messageId), { autoDraft: p.backfill !== true });
+      const deps = pipelineDeps(db, user);
+      // 分類し直すときは、前の分類で付けたラベルを先に外す
+      if (Array.isArray(p.removeLabels) && p.removeLabels.length) {
+        const labels = new LabelResolver(deps.mail);
+        const ids = (await Promise.all(p.removeLabels.map((name) => labels.existingId(String(name))))).filter(
+          (x): x is string => Boolean(x),
+        );
+        if (ids.length) {
+          await deps.mail.modifyMessage(String(p.messageId), [], ids).catch((err) => {
+            if (!(err instanceof MessageNotFoundError) && (err as { code?: number }).code !== 404) throw err;
+          });
+        }
+      }
+      await processMessage(deps, user, String(p.messageId), { autoDraft: p.backfill !== true });
     },
     generate_draft: async (p) => {
       const user = await loadUser(db, p.userId);

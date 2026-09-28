@@ -114,13 +114,33 @@ export function htmlToText(html: string): string {
     .replace(/<li[^>]*>/gi, "・")
     .replace(/<[^>]+>/g, "")
     .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, code: string) => {
-      if (code.startsWith("#x")) return String.fromCodePoint(parseInt(code.slice(2), 16));
-      if (code.startsWith("#")) return String.fromCodePoint(parseInt(code.slice(1), 10));
+      const n = code.startsWith("#x") ? parseInt(code.slice(2), 16) : code.startsWith("#") ? parseInt(code.slice(1), 10) : NaN;
+      if (code.startsWith("#")) return Number.isFinite(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "";
       return ENTITIES[code.toLowerCase()] ?? m;
     })
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/** パートの Content-Type から文字コードを読む（無ければ UTF-8） */
+function partCharset(part: Part): string {
+  const ct = part.headers?.find((h) => h.name?.toLowerCase() === "content-type")?.value ?? "";
+  return ct.match(/charset\s*=\s*"?([^";\s]+)"?/i)?.[1]?.toLowerCase() ?? "utf-8";
+}
+
+/**
+ * Gmail API はパートを元の文字コードのまま返す。日本の業務メールに多い ISO-2022-JP や Shift_JIS を
+ * UTF-8 として読むと文字化けするので、宣言された文字コードで読む。
+ */
+export function decodeText(data: string, charset: string): string {
+  const bytes = decodeBase64Url(data);
+  const label = charset === "cp932" || charset === "windows-31j" || charset === "x-sjis" ? "shift_jis" : charset;
+  try {
+    return new TextDecoder(label).decode(bytes);
+  } catch {
+    return bytes.toString("utf8");
+  }
 }
 
 function walk(part: Part | undefined, out: { plain: string[]; html: string[]; attachments: AttachmentInfo[] }) {
@@ -137,8 +157,8 @@ function walk(part: Part | undefined, out: { plain: string[]; html: string[]; at
     });
     return;
   }
-  if (mime === "text/plain" && part.body?.data) out.plain.push(decodeBase64Url(part.body.data).toString("utf8"));
-  else if (mime === "text/html" && part.body?.data) out.html.push(decodeBase64Url(part.body.data).toString("utf8"));
+  if (mime === "text/plain" && part.body?.data) out.plain.push(decodeText(part.body.data, partCharset(part)));
+  else if (mime === "text/html" && part.body?.data) out.html.push(decodeText(part.body.data, partCharset(part)));
   for (const child of part.parts ?? []) walk(child, out);
 }
 

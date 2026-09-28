@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "./db";
 import { addressMap, contacts, dateCandidates, messages, rules, type User } from "./db/schema";
 import { classifyByHeaders, type SenderRule } from "./classify/stage1";
@@ -7,10 +7,11 @@ import type { Classifier, ContentClassification } from "./classify/types";
 import { DATE_KINDS, STATUS_LABELS, isFolder, type Folder } from "./domain";
 import { MessageNotFoundError, type MailApi } from "./google/mail-api";
 import { LabelResolver } from "./labels";
-import { parseMessage, stripQuoted, type ParsedMessage } from "./mail/parse";
+import { listIdToAddress, parseMessage, stripQuoted, type ParsedMessage } from "./mail/parse";
 import { enqueue } from "./jobs";
 import { canSeeMessage } from "./access";
 import { getSetting } from "./settings";
+import { isRetryableApiError } from "./claude/client";
 
 export interface PipelineDeps {
   db: Db;
@@ -42,7 +43,9 @@ async function reuseClassification(db: Db, rfcMessageId: string | null): Promise
   if (!rfcMessageId) return null;
   const rows = await db.select().from(messages).where(eq(messages.rfcMessageId, rfcMessageId)).limit(1);
   const row = rows[0];
-  if (!row || !row.category || row.source === "sender_rule" || row.source === "domain_rule") return null;
+  // 分類に失敗して要確認になった行や、自信の値が無い行は使い回さない（誤りが広がるため）
+  if (!row || !row.category || row.needsReview || row.confidence === null) return null;
+  if (row.source === "sender_rule" || row.source === "domain_rule" || row.source === "manual") return null;
   const dates = await db
     .select()
     .from(dateCandidates)
@@ -64,7 +67,7 @@ async function reuseClassification(db: Db, rfcMessageId: string | null): Promise
     due_date: row.dueDate,
     summary: row.summary,
     accepts_proposed_time: row.suggestConfirm,
-    confidence: row.confidence ?? 1,
+    confidence: row.confidence,
   };
 }
 
@@ -123,6 +126,7 @@ export async function processMessage(
   const skipLabel = msg.labelIds.find((l) => SKIP_LABELS.includes(l));
   if (skipLabel) return { kind: "skipped", reason: skipLabel };
   if (!msg.from) return { kind: "skipped", reason: "no_sender" };
+  const from = msg.from;
 
   const { senderRules, addresses } = await loadRules(db);
   const stage1 = classifyByHeaders(msg, senderRules, addresses);
@@ -131,7 +135,11 @@ export async function processMessage(
   const ruleSaysInfo = (stage1.source === "sender_rule" || stage1.source === "domain_rule") && stage1.folder === "info";
   // 一斉配信が個人・総合窓口アドレスに届いたときは、Claude を使わずニュースレターへ。
   // 実際の受信箱の約8割がこれに当たる。用途別アドレス宛てと送信者ルールがあるものは対象外
-  const bulkToPersonal = msg.bulk && (stage1.source === "none" || (stage1.source === "address" && stage1.contentDecides));
+  const bulkToPersonal =
+    msg.bulk &&
+    !isOwnGroupMail(msg, addresses) &&
+    !looksLikeBusiness(msg) &&
+    (stage1.source === "none" || (stage1.source === "address" && stage1.contentDecides));
   if (!ruleSaysInfo && !bulkToPersonal) {
     content = await reuseClassification(db, msg.messageIdHeader);
     if (!content) {
@@ -146,6 +154,8 @@ export async function processMessage(
           stage1Folder: stage1.folder,
         });
       } catch (err) {
+        // 混雑（429）や一時的な障害はジョブごと後でやり直す。それ以外は要確認として置く
+        if (isRetryableApiError(err)) throw err;
         console.error("classification failed", gmailMessageId, err);
         content = null;
       }
@@ -155,7 +165,13 @@ export async function processMessage(
   const merged: MergedClassification = bulkToPersonal
     ? { folder: "info", category: "info", secondaryFolders: stage1.secondaryFolders, source: "content", needsReview: false }
     : mergeClassification(stage1, content);
-  const needsReply = content?.needs_reply ?? false;
+  // 返信が要ると判定されても、このメールより後に自分たちが返信していれば対応済み（過去メールの取り込みで多い）
+  let needsReply = content?.needs_reply ?? false;
+  let answered = false;
+  if (needsReply) {
+    answered = await answeredLater(mail, user, msg);
+    if (answered) needsReply = false;
+  }
 
   // 相手が仮予定を承諾したと読めるか（同じスレッドに「仮」の予定があるときだけ）
   let suggestConfirm = false;
@@ -174,15 +190,21 @@ export async function processMessage(
     suggestConfirm = tentative.length > 0;
   }
 
-  const inserted = await db
+  // Gmail 側（ラベル）を先に付ける。途中で失敗してもジョブの再実行で最初からやり直せるよう、
+  // DB への記録は最後に1つのトランザクションで行う
+  await applyLabels(mail, msg, merged, needsReply);
+
+  const messageRowId = await db.transaction(async (txRaw) => {
+    const tx = txRaw as unknown as Db;
+    const inserted = await tx
     .insert(messages)
     .values({
       userId: user.id,
       gmailMessageId: msg.id,
       gmailThreadId: msg.threadId,
       rfcMessageId: msg.messageIdHeader,
-      fromEmail: msg.from.email,
-      fromName: msg.from.name,
+      fromEmail: from.email,
+      fromName: from.name,
       subject: msg.subject,
       toAddresses: [...msg.to, ...msg.cc].map((a) => a.email),
       folder: merged.folder,
@@ -199,19 +221,20 @@ export async function processMessage(
       confidence: content?.confidence ?? null,
       needsReview: merged.needsReview,
       suggestConfirm,
-      status: needsReply ? "new" : "done",
+      status: needsReply ? "new" : answered ? "replied" : "done",
       unread: msg.labelIds.includes("UNREAD"),
       hasAttachments: msg.attachments.length > 0,
       receivedAt: msg.date,
     })
     .onConflictDoNothing()
     .returning({ id: messages.id });
-  if (!inserted.length) return { kind: "skipped", reason: "already_processed" };
-  const messageRowId = inserted[0].id;
-
-  await applyLabels(mail, msg, merged, needsReply);
-  await saveDateCandidates(db, user, msg, content);
-  await upsertContact(db, msg);
+    if (!inserted.length) return null;
+    await saveDateCandidates(tx, user, msg, content);
+    // ニュースレターの送り主は連絡先に入れない（夜間の要約の対象を業務の相手に絞る）
+    if (merged.folder !== "info") await upsertContact(tx, msg);
+    return inserted[0].id;
+  });
+  if (messageRowId === null) return { kind: "skipped", reason: "already_processed" };
 
   let draftQueued = false;
   // 見られないフォルダのメールには、その人の受信箱で下書きを作らない
@@ -308,11 +331,46 @@ async function saveDateCandidates(
 
 async function upsertContact(db: Db, msg: ParsedMessage): Promise<void> {
   if (!msg.from) return;
+  // 過去メールは新しい順に処理されるので、最終受信日時は大きい方を残す
   await db
     .insert(contacts)
     .values({ email: msg.from.email, name: msg.from.name, lastMessageAt: msg.date })
     .onConflictDoUpdate({
       target: contacts.email,
-      set: { lastMessageAt: msg.date, updatedAt: new Date() },
+      set: {
+        lastMessageAt: sql`greatest(${contacts.lastMessageAt}, excluded.last_message_at)`,
+        name: sql`coalesce(${contacts.name}, excluded.name)`,
+        updatedAt: new Date(),
+      },
     });
+}
+
+/** 自分たちの Google グループ（info@ など）経由のメール。グループが List-Unsubscribe を付けるので一斉配信と見分ける */
+function isOwnGroupMail(msg: ParsedMessage, addresses: Array<{ address: string }>): boolean {
+  const group = listIdToAddress(msg.listId);
+  return Boolean(group && addresses.some((a) => a.address.toLowerCase() === group));
+}
+
+/** 一斉配信の形でも、請求書・注文・予約・問合せなどは Claude で分類する */
+const BUSINESS_HINT =
+  /請求|領収|支払|振込|入金|納品|見積|注文|発注|予約|問い?合わ?せ|お問合せ|取材|応募|invoice|receipt|payment|billing|order|booking|reservation|inquiry|enquiry|quote|quotation/i;
+
+function looksLikeBusiness(msg: ParsedMessage): boolean {
+  if (BUSINESS_HINT.test(msg.subject)) return true;
+  return msg.attachments.some((a) => a.mimeType === "application/pdf");
+}
+
+/** このメールより後に、自分たちが同じスレッドで返信しているか */
+async function answeredLater(mail: MailApi, user: User, msg: ParsedMessage): Promise<boolean> {
+  try {
+    const thread = await mail.getThread(msg.threadId);
+    return (thread.messages ?? []).some((m) => {
+      const labels = m.labelIds ?? [];
+      if (labels.includes("DRAFT")) return false;
+      const ours = labels.includes("SENT");
+      return ours && Number(m.internalDate ?? 0) > msg.date.getTime();
+    });
+  } catch {
+    return false;
+  }
 }

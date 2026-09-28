@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { visibleFolders } from "@/lib/access";
 import { folderName } from "@/lib/domain";
-import { folderCounts } from "@/lib/queries";
+import { folderCounts, totalReplyCount } from "@/lib/queries";
 import { NavLink } from "@/components/nav-link";
 import { KeyboardNav } from "@/components/keyboard-nav";
 import { NotifyToggle } from "@/components/notify-toggle";
@@ -16,7 +16,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const db = await getDb();
   const counts = await folderCounts(db, user);
   const folders = visibleFolders(user);
-  const totalReply = folders.reduce((n, f) => n + (counts.get(f)?.reply ?? 0), 0);
+  const totalReply = await totalReplyCount(db, user);
 
   return (
     <div className="app">
@@ -38,7 +38,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             {folders.map((f) => {
               const c = counts.get(f);
               return (
-                <NavLink key={f} href={`/inbox?folder=${f}`} count={c?.reply || c?.unread || 0} hot={Boolean(c?.reply)}>
+                <NavLink key={f} href={`/inbox?folder=${f}`} count={c?.reply ?? 0} hot>
                   {folderName(f)}
                 </NavLink>
               );

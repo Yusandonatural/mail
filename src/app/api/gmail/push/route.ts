@@ -32,6 +32,6 @@ export async function POST(req: NextRequest) {
 
   await syncUser(db, mailFor(user), user);
   // 重い処理（下書き生成）が残っても、次の通知か 5 分ごとの cron で続きを行う
-  await runJobs(db, jobHandlers(db), 45_000);
+  await runJobs(db, jobHandlers(db), 20_000);
   return new NextResponse(null, { status: 204 });
 }

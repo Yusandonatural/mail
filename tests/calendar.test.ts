@@ -61,7 +61,7 @@ describe("カレンダー登録", () => {
     expect(event.start).toBe("2026-10-03T10:00:00+09:00");
     expect(event.end).toBe("2026-10-03T11:00:00+09:00");
     expect(event.description).toContain("#all/t1");
-    expect(event.attendees).toEqual(["guest@t.example"]);
+    expect(event.attendees).toEqual([]);
     const [row] = await db.select().from(dateCandidates);
     expect(row).toMatchObject({ status: "tentative", calendarEventId: "ev1" });
 

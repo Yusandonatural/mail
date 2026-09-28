@@ -29,7 +29,9 @@ import {
   saveSignaturesAction,
   saveUserAction,
   saveNotifyAction,
+  reclassifyAction,
 } from "@/app/actions/settings";
+import { countUnclassified } from "@/lib/sync";
 import { disconnectFreeeAction, selectFreeeCompanyAction } from "@/app/actions/freee";
 import { freeeConfigured } from "@/lib/freee";
 import { pushConfigured } from "@/lib/notify";
@@ -48,8 +50,12 @@ function FolderSelect({ name, value }: { name: string; value?: string }) {
   );
 }
 
-export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ freee?: string }> }) {
-  const { freee: freeeMessage } = await searchParams;
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ freee?: string; backfill?: string }>;
+}) {
+  const { freee: freeeMessage, backfill: backfillQueued } = await searchParams;
   const admin = await requireAdmin();
   const db = await getDb();
   const [addresses, ruleRows, userRows, playbookRows, logs, failedJobs] = await Promise.all([
@@ -74,6 +80,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
     getSetting(db, "freee"),
     getSetting(db, "notify"),
   ]);
+  const unclassified = await countUnclassified(db, admin);
   const calendars = await Promise.resolve()
     .then(() => calendarFor(admin).listCalendars())
     .catch(() => []);
@@ -129,17 +136,29 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             ))}
           </tbody>
         </table>
-        <form action={saveUserAction} className="inline-form" style={{ marginTop: 10 }}>
-          <div>
-            <label>追加するメールアドレス</label>
-            <input name="email" type="email" placeholder="staff@yusando.com" />
+        <form action={saveUserAction} className="stack" style={{ marginTop: 10 }}>
+          <input type="hidden" name="mode" value="add" />
+          <div className="inline-form">
+            <div>
+              <label>追加するメールアドレス</label>
+              <input name="email" type="email" placeholder="staff@yusando.com" required />
+            </div>
+            <div>
+              <label>役割</label>
+              <select name="role" defaultValue="staff">
+                <option value="staff">担当者</option>
+                <option value="admin">管理者</option>
+              </select>
+            </div>
           </div>
           <div>
-            <label>役割</label>
-            <select name="role" defaultValue="staff">
-              <option value="staff">担当者</option>
-              <option value="admin">管理者</option>
-            </select>
+            <label>見られるフォルダ（担当者のとき）</label>
+            {FOLDER_KEYS.map((f) => (
+              <label key={f} className="inline">
+                <input type="checkbox" name="visibleFolders" value={f} defaultChecked={f !== "keiri" && f !== "personal"} />
+                {folderName(f)}
+              </label>
+            ))}
           </div>
           <SubmitButton className="primary">追加</SubmitButton>
         </form>
@@ -436,7 +455,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       </div>
 
       <div className="panel">
-        <h2>過去のメールの取り込み</h2>
+        <h2 id="backfill">過去のメールの取り込み</h2>
+        {backfillQueued ? <div className="notes">{backfillQueued} 通を取り込みの順番待ちに入れました。新しく届くメールを優先して、5分ごとに少しずつ進みます。</div> : null}
         <p className="meta">あなたの受信箱にある過去のメールを、さかのぼって分類します（下書きは自動では作りません）。</p>
         <form action={backfillAction} className="inline-form">
           <div>
@@ -445,6 +465,17 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           </div>
           <SubmitButton>取り込む</SubmitButton>
         </form>
+        {unclassified ? (
+          <form action={reclassifyAction} className="stack" style={{ marginTop: 12 }}>
+            <p className="meta">
+              Claude で分類できていないメールが {unclassified} 通あります（以前の不具合で分類に失敗したもの、一斉配信として分類を省いたもの）。
+              分類し直すと、フォルダとラベルが付け直されます。人が直したものとルールで決まったものは変わりません。
+            </p>
+            <div>
+              <SubmitButton>分類し直す</SubmitButton>
+            </div>
+          </form>
+        ) : null}
         <p className="meta">処理待ちのジョブ：{pendingJobs} 件</p>
         {failedJobs.length ? (
           <details>

@@ -31,10 +31,15 @@ export async function enqueue(
   dedupeKey: string,
   runAfter: Date = new Date(),
 ): Promise<boolean> {
+  // 同じキーのジョブが「失敗」で終わっていれば、積み直す（取り込みのやり直しで拾えるように）
   const rows = await db
     .insert(jobs)
     .values({ kind, payload, dedupeKey, runAfter })
-    .onConflictDoNothing()
+    .onConflictDoUpdate({
+      target: jobs.dedupeKey,
+      set: { status: "pending", attempts: 0, runAfter, lastError: null, payload },
+      setWhere: sql`${jobs.status} = 'failed'`,
+    })
     .returning({ id: jobs.id });
   return rows.length > 0;
 }
@@ -48,7 +53,8 @@ export async function claimNext(db: Db, now: Date = new Date()): Promise<Claimed
       select id from jobs
       where (status = 'pending' and run_after <= ${now.toISOString()}::timestamptz)
          or (status = 'running' and locked_at < ${stale.toISOString()}::timestamptz)
-      order by run_after
+      -- 新しく届いたメールを、過去メールの取り込みより先に処理する
+      order by (payload ? 'backfill') , run_after, id
       limit 1
       for update skip locked
     )

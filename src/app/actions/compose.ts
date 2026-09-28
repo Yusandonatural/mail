@@ -19,6 +19,8 @@ export interface ComposeInput {
   includeAttachments: boolean;
   /** 送らずに Gmail の下書きとして保存するだけ（【要確認】が残っていてもよい） */
   saveOnly?: boolean;
+  /** 前に保存した下書き。あれば作り直さずに上書きする（下書きが増えないように） */
+  existingDraftId?: string | null;
 }
 
 /** 新規作成・転送の下書きを Gmail に作る。送信はブラウザが行う */
@@ -58,7 +60,10 @@ export async function createComposeDraft(
       text: input.text,
       attachments,
     });
-    const ref = await mail.createDraft(raw, threadId);
+    const existing = input.existingDraftId ? await mail.getDraft(input.existingDraftId) : null;
+    const ref = existing
+      ? await mail.updateDraft(existing.draftId, raw, threadId)
+      : await mail.createDraft(raw, threadId);
     return { ok: true, data: { gmailDraftId: ref.draftId, email: user.email } };
   } catch (err) {
     return errorResult(err);

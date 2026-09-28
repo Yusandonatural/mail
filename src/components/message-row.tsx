@@ -9,10 +9,20 @@ export function formatAmount(amount: number | null, currency: string | null): st
   return `${amount.toLocaleString("en-US")} ${currency}`;
 }
 
-export function MessageRowView({ m, keiri, showFolder }: { m: ListedMessage; keiri: boolean; showFolder: boolean }) {
+export function MessageRowView({
+  m,
+  keiri,
+  showFolder,
+  back,
+}: {
+  m: ListedMessage;
+  keiri: boolean;
+  showFolder: boolean;
+  back: string;
+}) {
   const open = m.needsReply && (m.status === "new" || m.status === "draft_ready");
   return (
-    <Link href={`/m/${m.id}`} className={["row", keiri ? "keiri" : "", m.unread ? "unread" : ""].join(" ")}>
+    <Link href={`/m/${m.id}?back=${encodeURIComponent(back)}`} className={["row", keiri ? "keiri" : "", m.unread ? "unread" : ""].join(" ")}>
       <div className="who">{m.fromName || m.fromEmail}</div>
       <div style={{ minWidth: 0 }}>
         <div className="subject">{m.subject || "(件名なし)"}</div>

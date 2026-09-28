@@ -91,7 +91,7 @@ export default async function SearchPage({
           {results.length ? (
             results.map(({ parsed: p, rowId }) =>
               rowId ? (
-                <Link key={p.id} href={`/m/${rowId}`} className="row">
+                <Link key={p.id} href={`/m/${rowId}?back=${encodeURIComponent(`/search?q=${encodeURIComponent(q)}`)}`} className="row">
                   <div className="who">{p.from?.name || p.from?.email}</div>
                   <div className="subject">{p.subject || "(件名なし)"}</div>
                   <div className="when">{formatJst(p.date)}</div>
