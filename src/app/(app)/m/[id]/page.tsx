@@ -29,6 +29,9 @@ import { SubmitButton } from "@/components/submit-button";
 import { formatAmount } from "@/components/message-row";
 import { FreeePanel } from "@/components/freee-panel";
 import { MarkRead } from "@/components/mark-read";
+import { Translation } from "@/components/translation";
+import { isMostlyJapanese } from "@/lib/translate";
+import { stripQuoted } from "@/lib/mail/parse";
 import { canSeeFolder } from "@/lib/access";
 import { FREEE_RECEIPT_TYPES } from "@/lib/freee";
 import { uploadKey, uploadsFor } from "@/lib/freee-service";
@@ -258,6 +261,9 @@ export default async function MessagePage({
                     <span>{formatJst(m.date)}</span>
                   </div>
                   {m.html ? <HtmlFrame html={m.html} showImages={images === "1"} /> : <pre>{m.text}</pre>}
+                  {!isMostlyJapanese(stripQuoted(m.text) || m.text) ? (
+                    <Translation rowId={row.id} gmailMessageId={m.id} />
+                  ) : null}
                   {m.attachments.length ? (
                     <div className="attachments">
                       {m.attachments.map((a) => (
@@ -300,6 +306,7 @@ export default async function MessagePage({
                 clientId={clientId}
                 userEmail={user.email}
                 label={draftViews.length > 1 ? (i === 0 ? "返信下書き（最新の案）" : `別案 ${i}`) : "返信下書き"}
+                replyLanguage={row.language === "ja" ? "en" : row.language}
                 backHref={back}
               />
             ))

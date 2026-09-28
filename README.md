@@ -16,6 +16,7 @@
 | 6章 カレンダー | 日程候補の表示、仮予定の登録、空き時間から候補3つの提案、支払期日の終日予定、承諾の返信で確定の提案 | `src/lib/calendar-service.ts`, `src/lib/slots.ts` |
 | 8章 画面 | フォルダ・一覧・本文・下書き・日程・連絡先・今日の予定・設定。キーボード操作（j/k/Enter/e/r/u//）。スマホ表示 | `src/app/`, `src/components/` |
 | 11章 権限 | yusando.com の Google アカウントのみ。管理者と担当者（見られるフォルダを指定）。操作の記録 | `src/lib/access.ts`, `src/lib/audit.ts` |
+| 翻訳 | 外国語のメールは本文の下に日本語訳を出す。日本語で書いた返信を相手の言語に訳して下書きを置き換える（署名も差し替え、【要確認】は残す）。訳文は DB に保存しない | `src/lib/translate.ts`, `src/components/translation.tsx` |
 | 4章 通知 | 至急の要返信をスマホ・パソコンに通知（Web Push）。ホーム画面に追加して使える | `src/lib/notify.ts`, `public/sw.js` |
 | P4 | 連絡先メモと夜間の関係要約（Message Batches）、Shopify の注文照会（任意） | `src/lib/contacts.ts`, `src/lib/shopify.ts` |
 | P4 freee | 経理フォルダの請求書・領収書の PDF や画像を、freee 会計のファイルボックスに送る（二重送信しない） | `src/lib/freee.ts`, `src/lib/freee-service.ts` |

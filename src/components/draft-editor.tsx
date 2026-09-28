@@ -3,6 +3,8 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { findPlaceholders } from "@/lib/placeholders";
+import { translateReplyAction } from "@/app/actions/translate";
+import { LANGUAGE_LABELS, LANGUAGES } from "@/lib/domain";
 import { emptyReplyAction, generateDraftAction, markSentAction, prepareSendAction, saveDraftAction } from "@/app/actions/mail";
 import { SendButton } from "./send-button";
 
@@ -25,6 +27,7 @@ export function DraftEditor({
   userEmail,
   label,
   backHref,
+  replyLanguage,
 }: {
   draft: DraftView;
   rowId: number;
@@ -32,7 +35,10 @@ export function DraftEditor({
   userEmail: string;
   label: string;
   backHref: string;
+  replyLanguage: string;
 }) {
+  const [target, setTarget] = useState(replyLanguage);
+  const [beforeTranslate, setBeforeTranslate] = useState<string | null>(null);
   const router = useRouter();
   const [text, setText] = useState(draft.text);
   const [instruction, setInstruction] = useState("");
@@ -91,6 +97,62 @@ export function DraftEditor({
           Gmail で開く
         </a>
       </div>
+      <details open={beforeTranslate !== null}>
+        <summary>翻訳する</summary>
+        <div className="stack">
+          <p className="meta">日本語で書いた返信を訳して、下書き欄を置き換えます。署名は訳した言語のものに差し替えます。保存も送信もまだしません。</p>
+          <div className="inline-form">
+            <div>
+              <label htmlFor={`target-${draft.id}`}>翻訳先</label>
+              <select id={`target-${draft.id}`} value={target} onChange={(e) => setTarget(e.target.value)}>
+                {LANGUAGES.filter((l) => l !== "ja").map((l) => (
+                  <option key={l} value={l}>
+                    {LANGUAGE_LABELS[l]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              disabled={pending || !text.trim()}
+              onClick={() =>
+                start(async () => {
+                  setStatus(null);
+                  const original = text;
+                  const r = await translateReplyAction(draft.id, original, target);
+                  if (!r.ok || !r.data) {
+                    setStatus(r.ok ? "翻訳できませんでした" : r.error);
+                    return;
+                  }
+                  setBeforeTranslate(original);
+                  setText(r.data.text);
+                  setStatus(`${LANGUAGE_LABELS[target as keyof typeof LANGUAGE_LABELS]}に訳しました。内容を確かめてから保存・送信してください`);
+                })
+              }
+            >
+              翻訳して置き換える
+            </button>
+          </div>
+          {beforeTranslate !== null ? (
+            <div className="translation" lang="ja">
+              <div className="translation-head">
+                <span>元の日本語</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setText(beforeTranslate);
+                    setBeforeTranslate(null);
+                    setStatus("元の日本語に戻しました");
+                  }}
+                >
+                  元に戻す
+                </button>
+              </div>
+              <pre>{beforeTranslate}</pre>
+            </div>
+          ) : null}
+        </div>
+      </details>
       <details>
         <summary>書き直す（Claude）</summary>
         <div className="stack">

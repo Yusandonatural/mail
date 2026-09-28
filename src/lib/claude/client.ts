@@ -12,6 +12,7 @@ export const MODELS = {
   draft: process.env.CLAUDE_DRAFT_MODEL || "claude-opus-5",
   classify: process.env.CLAUDE_CLASSIFY_MODEL || "claude-haiku-4-5",
   summarize: process.env.CLAUDE_SUMMARY_MODEL || "claude-haiku-4-5",
+  translate: process.env.CLAUDE_TRANSLATE_MODEL || "claude-opus-5",
 };
 
 /** Claude が安全上の理由で応答しなかった（リトライしても同じ結果になる） */

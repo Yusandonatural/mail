@@ -245,6 +245,10 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; font-size: 1
 .inline-form > div { flex: 1; min-width: 130px; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .notes { background: var(--info-soft); border-radius: var(--radius); padding: 9px 12px; font-size: 13px; white-space: pre-wrap; line-height: 1.75; }
+.translation { margin-top: 12px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+.translation-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; font-weight: 700; font-size: 13px; }
+.translation-subject { margin: 0; font-weight: 500; }
+.translation pre { line-height: 1.85; }
 .placeholder-list { font-size: 12.5px; color: var(--vermilion); }
 .cand { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
 .cand + .cand { margin-top: 10px; }
