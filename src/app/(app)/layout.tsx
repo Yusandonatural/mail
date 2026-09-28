@@ -21,8 +21,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="app">
       <aside className="sidebar">
-        <a className="brand" href="/inbox">
-          悠三堂メール
+        <a className="brand" href="/inbox" aria-label="悠三堂メール 受信箱へ">
+          <span className="seal" aria-hidden="true">
+            悠
+          </span>
+          <span className="brand-name">
+            悠三堂
+            <small>メール</small>
+          </span>
         </a>
         <Suspense>
           <nav className="nav">

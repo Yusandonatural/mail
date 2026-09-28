@@ -403,7 +403,7 @@ export default async function SettingsPage({
           </div>
         ) : (
           <p>
-            <a className="button primary" href="/api/freee/connect" style={{ background: "var(--accent)", color: "#fff" }}>
+            <a className="button primary" href="/api/freee/connect">
               freee と連携する
             </a>
           </p>
