@@ -28,6 +28,7 @@ import { DraftCreate, DraftEditor, type DraftView } from "@/components/draft-edi
 import { SubmitButton } from "@/components/submit-button";
 import { formatAmount } from "@/components/message-row";
 import { FreeePanel } from "@/components/freee-panel";
+import { MarkRead } from "@/components/mark-read";
 import { canSeeFolder } from "@/lib/access";
 import { FREEE_RECEIPT_TYPES } from "@/lib/freee";
 import { uploadKey, uploadsFor } from "@/lib/freee-service";
@@ -79,10 +80,6 @@ export default async function MessagePage({
     loadError = err instanceof Error ? err.message : String(err);
   }
 
-  if (row.unread && mail && !loadError) {
-    await mail.modifyMessage(row.gmailMessageId, [], ["UNREAD"]).catch(() => undefined);
-    await db.update(messages).set({ unread: false }).where(eq(messages.id, row.id));
-  }
 
   // 下書き（Gmail から本文を読む。Gmail 側で消えたものは閉じる。読めないときは触らない）
   const draftViews: DraftView[] = [];
@@ -139,6 +136,7 @@ export default async function MessagePage({
 
   return (
     <>
+      {row.unread ? <MarkRead rowId={row.id} /> : null}
       <div className="topbar">
         <Link href={back} data-back>
           ← 一覧に戻る

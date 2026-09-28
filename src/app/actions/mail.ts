@@ -260,3 +260,20 @@ export async function importMessageAction(formData: FormData): Promise<void> {
   if (row) redirect(`/m/${row.id}`);
   redirect("/search");
 }
+
+/**
+ * 開いたメールを既読にする。アプリの一覧・左の件数と、Gmail 側の未読の両方を更新する。
+ * Gmail への反映に失敗しても、アプリ側は既読にする（次の同期で揃う）。
+ */
+export async function markReadAction(rowId: number): Promise<void> {
+  const { user, row } = await ownMessage(rowId);
+  if (!row.unread) return;
+  const db = await getDb();
+  await db.update(messages).set({ unread: false }).where(eq(messages.id, row.id));
+  try {
+    await mailFor(user).modifyMessage(row.gmailMessageId, [], ["UNREAD"]);
+  } catch (err) {
+    console.error("mark read in Gmail failed", row.gmailMessageId, err);
+  }
+  revalidatePath("/", "layout");
+}

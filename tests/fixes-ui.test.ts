@@ -69,3 +69,17 @@ describe("通知", () => {
     expect(n).toBe(1);
   });
 });
+
+describe("一覧の並び順", () => {
+  it("至急かどうかに関係なく、新しく届いた順に並べる", async () => {
+    const db = await testDb();
+    const user = await makeUser(db);
+    const base = { userId: user.id, fromEmail: "a@b.c", source: "address", folder: "tour", needsReply: true, status: "new" };
+    await db.insert(messages).values([
+      { ...base, gmailMessageId: "old-urgent", gmailThreadId: "t1", urgency: "high", receivedAt: new Date("2026-09-01T00:00:00Z") },
+      { ...base, gmailMessageId: "new-normal", gmailThreadId: "t2", urgency: "normal", receivedAt: new Date("2026-09-20T00:00:00Z") },
+    ]);
+    const rows = await listMessages(db, user, { folder: null, filter: "all", page: 0 });
+    expect(rows.map((r) => r.gmailMessageId)).toEqual(["new-normal", "old-urgent"]);
+  });
+});

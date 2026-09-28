@@ -65,13 +65,12 @@ export async function listMessages(
   if (opts.filter === "dates") conds.push(hasDates);
   const freeeSent = sql<boolean>`exists (select 1 from freee_uploads f where f.gmail_message_id = "messages"."gmail_message_id" or (f.rfc_message_id is not null and f.rfc_message_id = "messages"."rfc_message_id"))`;
 
-  // 要返信で緊急度の高いものを先頭に、あとは新しい順
-  const hot = sql`case when ${messages.urgency} = 'high' and ${messages.status} in ('new', 'draft_ready') then 0 else 1 end`;
+  // 新しく届いた順（至急のものは左端の赤い帯で見分ける）
   const rows = await db
     .select({ m: messages, hasDates, freeeSent })
     .from(messages)
     .where(and(...conds))
-    .orderBy(hot, desc(messages.receivedAt))
+    .orderBy(desc(messages.receivedAt), desc(messages.id))
     .limit(size + 1)
     .offset(opts.page * size);
   return rows.map((r) => ({ ...r.m, hasDates: Boolean(r.hasDates), freeeSent: Boolean(r.freeeSent) }));
