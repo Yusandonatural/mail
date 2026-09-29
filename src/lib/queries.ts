@@ -3,7 +3,7 @@ import type { Db } from "./db";
 import { dateCandidates, drafts, messages, type MessageRow, type User } from "./db/schema";
 
 import { visibleFolders } from "./access";
-import type { Folder } from "./domain";
+import { PERSONAL_FOLDER_KEY, type Folder } from "./domain";
 
 export interface FolderCount {
   reply: number;
@@ -46,6 +46,21 @@ function inFolder(folder: string): SQL {
   return or(eq(messages.folder, folder), sql`${messages.secondaryFolders} @> ${JSON.stringify([folder])}::jsonb`)!;
 }
 
+/**
+ * 「受信箱（全て）」に出すメール：まだどの業務フォルダにも振り分けられていないもの。
+ * 個人フォルダにあって業務フォルダの副ラベルも無いメールと、振り分けに自信が無い「要確認」のメール。
+ * 振り分け済みのメールは、それぞれのフォルダだけに出す。
+ */
+function unsorted(): SQL {
+  return or(
+    eq(messages.needsReview, true),
+    and(
+      eq(messages.folder, PERSONAL_FOLDER_KEY),
+      sql`not exists (select 1 from jsonb_array_elements_text(${messages.secondaryFolders}) f where f <> ${PERSONAL_FOLDER_KEY})`,
+    ),
+  )!;
+}
+
 export async function listMessages(
   db: Db,
   user: User,
@@ -55,8 +70,8 @@ export async function listMessages(
   const visible = visibleFolders(user);
   const conds: SQL[] = [eq(messages.userId, user.id), sql`${messages.status} <> 'skipped'`];
   if (opts.folder) conds.push(inFolder(opts.folder));
-  // 「受信箱（全て）」にはニュースレターを出さない（受信の約8割を占めるため）
-  else conds.push(or(...visible.filter((f) => f !== "info").map(inFolder))!, sql`${messages.folder} <> 'info'`);
+  // 「受信箱（全て）」には振り分け前のメールだけを出す（ニュースレターも出さない）
+  else conds.push(or(...visible.filter((f) => f !== "info").map(inFolder))!, sql`${messages.folder} <> 'info'`, unsorted());
   if (opts.filter === "reply") conds.push(and(eq(messages.needsReply, true), inArray(messages.status, ["new", "draft_ready"]))!);
   if (opts.filter === "draft") conds.push(eq(messages.status, "draft_ready"));
   if (opts.filter === "review") conds.push(eq(messages.needsReview, true));
@@ -92,7 +107,7 @@ export async function threadDrafts(db: Db, userId: number, threadId: string) {
     .orderBy(desc(drafts.createdAt), desc(drafts.id));
 }
 
-/** 要返信の件数（副ラベルで複数のフォルダに出るメールも1通として数える） */
+/** 「受信箱（全て）」の要返信の件数。一覧と同じく、振り分け前のメールだけを数える */
 export async function totalReplyCount(db: Db, user: User): Promise<number> {
   const visible = visibleFolders(user).filter((f) => f !== "info");
   const rows = await db
@@ -104,6 +119,8 @@ export async function totalReplyCount(db: Db, user: User): Promise<number> {
         eq(messages.needsReply, true),
         inArray(messages.status, ["new", "draft_ready"]),
         or(...visible.map(inFolder))!,
+        sql`${messages.folder} <> 'info'`,
+        unsorted(),
       ),
     );
   return Number(rows[0]?.n ?? 0);

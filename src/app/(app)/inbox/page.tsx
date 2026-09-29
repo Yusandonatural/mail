@@ -39,7 +39,7 @@ export default async function InboxPage({
     <>
       <div className="topbar">
         <h1>{folder ? folderName(folder) : "受信箱（全て）"}</h1>
-        {!folder ? <span className="meta">ニュースレターは「情報・ニュースレター」フォルダにあります</span> : null}
+        {!folder ? <span className="meta">フォルダに振り分けたメールは、左の各フォルダにあります</span> : null}
         <div className="filters">
           {FILTERS.map((f) => (
             <Link key={f} href={qs({ filter: f === "all" ? null : f })} className={f === filter ? "active" : undefined}>
@@ -60,7 +60,9 @@ export default async function InboxPage({
           {rows.length ? (
             rows.map((m) => <MessageRowView key={m.id} m={m} keiri={keiri} showFolder={!folder} back={qs({ page: page || null })} />)
           ) : (
-            <div className="empty">このフォルダにメールはありません</div>
+            <div className="empty">
+              {folder ? "このフォルダにメールはありません" : "振り分け前のメールはありません。左の各フォルダをご覧ください"}
+            </div>
           )}
         </div>
       </form>

@@ -8,19 +8,24 @@ import { makeUser, testDb } from "./helpers/db";
 import { FakeMail } from "./helpers/fake-mail";
 
 describe("受信箱（全て）", () => {
-  it("ニュースレターを出さず、要返信は副ラベルがあっても1通として数える", async () => {
+  it("振り分け前のメールと要確認だけを出し、振り分け済み・ニュースレターは各フォルダだけに出す", async () => {
     const db = await testDb();
     const user = await makeUser(db);
-    const base = { userId: user.id, fromEmail: "a@b.c", source: "address", receivedAt: new Date() };
+    const base = { userId: user.id, fromEmail: "a@b.c", source: "address", receivedAt: new Date(), needsReply: true, status: "new" };
     await db.insert(messages).values([
-      { ...base, gmailMessageId: "news", gmailThreadId: "t1", folder: "info" },
-      { ...base, gmailMessageId: "tour", gmailThreadId: "t2", folder: "personal", secondaryFolders: ["tour", "press"], needsReply: true, status: "new" },
+      { ...base, gmailMessageId: "news", gmailThreadId: "t1", folder: "info", needsReply: false },
+      { ...base, gmailMessageId: "tour", gmailThreadId: "t2", folder: "personal", secondaryFolders: ["tour", "press"] },
+      { ...base, gmailMessageId: "sale", gmailThreadId: "t3", folder: "wholesale" },
+      { ...base, gmailMessageId: "unsure", gmailThreadId: "t4", folder: "cafe", needsReview: true },
+      { ...base, gmailMessageId: "plain", gmailThreadId: "t5", folder: "personal" },
     ]);
     const rows = await listMessages(db, user, { folder: null, filter: "all", page: 0 });
-    expect(rows.map((r) => r.gmailMessageId)).toEqual(["tour"]);
+    expect(rows.map((r) => r.gmailMessageId).sort()).toEqual(["plain", "unsure"]);
+    expect(await totalReplyCount(db, user)).toBe(2);
+    const tour = await listMessages(db, user, { folder: "tour", filter: "all", page: 0 });
+    expect(tour.map((r) => r.gmailMessageId)).toEqual(["tour"]);
     const info = await listMessages(db, user, { folder: "info", filter: "all", page: 0 });
     expect(info.map((r) => r.gmailMessageId)).toEqual(["news"]);
-    expect(await totalReplyCount(db, user)).toBe(1);
   });
 
   it("戻り先はアプリ内の一覧だけを許す", () => {
@@ -79,7 +84,7 @@ describe("一覧の並び順", () => {
       { ...base, gmailMessageId: "old-urgent", gmailThreadId: "t1", urgency: "high", receivedAt: new Date("2026-09-01T00:00:00Z") },
       { ...base, gmailMessageId: "new-normal", gmailThreadId: "t2", urgency: "normal", receivedAt: new Date("2026-09-20T00:00:00Z") },
     ]);
-    const rows = await listMessages(db, user, { folder: null, filter: "all", page: 0 });
+    const rows = await listMessages(db, user, { folder: "tour", filter: "all", page: 0 });
     expect(rows.map((r) => r.gmailMessageId)).toEqual(["new-normal", "old-urgent"]);
   });
 });

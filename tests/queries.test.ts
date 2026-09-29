@@ -44,7 +44,9 @@ describe("一覧の取得", () => {
     const { db, admin } = await seed();
     const rows = await listMessages(db, admin, { folder: null, filter: "all", page: 0 });
     const byId = Object.fromEntries(rows.map((r) => [r.gmailMessageId, r.hasDates]));
-    expect(byId).toEqual({ m1: false, m2: false, m3: true });
+    expect(byId).toEqual({ m3: true });
+    const wholesale = await listMessages(db, admin, { folder: "wholesale", filter: "all", page: 0 });
+    expect(wholesale.map((r) => [r.gmailMessageId, r.hasDates])).toEqual([["m1", false]]);
     const dated = await listMessages(db, admin, { folder: null, filter: "dates", page: 0 });
     expect(dated.map((r) => r.gmailMessageId)).toEqual(["m3"]);
   });
@@ -54,7 +56,8 @@ describe("一覧の取得", () => {
     const tour = await listMessages(db, admin, { folder: "tour", filter: "all", page: 0 });
     expect(tour.map((r) => r.gmailMessageId)).toEqual(["m3"]);
     const reply = await listMessages(db, admin, { folder: null, filter: "reply", page: 0 });
-    expect(reply.map((r) => r.gmailMessageId).sort()).toEqual(["m1", "m3"]);
+    // 振り分け済みの m1（卸売）は受信箱（全て）に出さない。要確認の m3 は出す
+    expect(reply.map((r) => r.gmailMessageId).sort()).toEqual(["m3"]);
     const review = await listMessages(db, admin, { folder: null, filter: "review", page: 0 });
     expect(review.map((r) => r.gmailMessageId)).toEqual(["m3"]);
   });
@@ -64,8 +67,8 @@ describe("一覧の取得", () => {
     const staff = await makeUser(db, { email: "staff@yusando.com", role: "staff", visibleFolders: ["wholesale"] });
     // 担当者の受信箱にも同じメールがあるとする
     await db.insert(messages).values([
-      { userId: staff.id, gmailMessageId: "s1", gmailThreadId: "t1", fromEmail: "a@b.example", folder: "wholesale", source: "address", receivedAt: new Date() },
-      { userId: staff.id, gmailMessageId: "s2", gmailThreadId: "t2", fromEmail: "a@b.example", folder: "keiri", source: "address", receivedAt: new Date() },
+      { userId: staff.id, gmailMessageId: "s1", gmailThreadId: "t1", fromEmail: "a@b.example", folder: "wholesale", needsReview: true, source: "address", receivedAt: new Date() },
+      { userId: staff.id, gmailMessageId: "s2", gmailThreadId: "t2", fromEmail: "a@b.example", folder: "keiri", needsReview: true, source: "address", receivedAt: new Date() },
     ]);
     const rows = await listMessages(db, staff, { folder: null, filter: "all", page: 0 });
     expect(rows.map((r) => r.gmailMessageId)).toEqual(["s1"]);

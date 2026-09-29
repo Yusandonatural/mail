@@ -60,7 +60,8 @@ export async function moveFolder(formData: FormData): Promise<void> {
       .onConflictDoUpdate({ target: [rules.kind, rules.pattern], set: { folder } });
     await audit(db, user.id, "rule_created", pattern, { kind: remember, folder });
   }
-  revalidatePath(`/m/${row.id}`);
+  // 振り分けたメールは受信箱（全て）から外れるので、一覧と左の件数も更新する
+  revalidatePath("/", "layout");
 }
 
 export async function markReviewed(formData: FormData): Promise<void> {
@@ -70,7 +71,7 @@ export async function markReviewed(formData: FormData): Promise<void> {
   const review = await new LabelResolver(mail).existingId(STATUS_LABELS.needsReview);
   if (review) await mail.modifyMessage(row.gmailMessageId, [], [review]);
   await db.update(messages).set({ needsReview: false }).where(eq(messages.id, row.id));
-  revalidatePath(`/m/${row.id}`);
+  revalidatePath("/", "layout");
 }
 
 export async function generateDraftAction(
