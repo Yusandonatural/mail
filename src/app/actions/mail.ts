@@ -4,9 +4,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { contacts, drafts, messages, rules } from "@/lib/db/schema";
+import { contacts, drafts, messages, rules, type MessageRow, type User } from "@/lib/db/schema";
 import { audit } from "@/lib/audit";
-import { folderLabelName, isFolder, STATUS_LABELS } from "@/lib/domain";
+import { BLOCK_RULE, folderLabelName, isFolder, STATUS_LABELS } from "@/lib/domain";
+import { canSeeMessage } from "@/lib/access";
 import { generateDraft, saveDraftText } from "@/lib/drafts";
 import { LabelResolver } from "@/lib/labels";
 import { buildMime, replySubject } from "@/lib/mail/mime";
@@ -204,26 +205,116 @@ export async function markSentAction(draftRowId: number): Promise<ActionResult> 
   }
 }
 
+export type RemoveKind = "archive" | "spam" | "trash";
+
+function isRemoveKind(v: unknown): v is RemoveKind {
+  return v === "archive" || v === "spam" || v === "trash";
+}
+
+/**
+ * アーカイブ・迷惑メール・ゴミ箱。Gmail 側を先に変え、成功した行だけアプリの一覧から外す。
+ * ゴミ箱と迷惑メールは Gmail で30日間は元に戻せる。
+ */
+async function removeRows(user: User, rows: MessageRow[], kind: RemoveKind): Promise<number> {
+  const db = await getDb();
+  const mail = mailFor(user);
+  const done = kind === "archive" ? await new LabelResolver(mail).statusId("done") : null;
+  const ok: number[] = [];
+  for (const row of rows) {
+    try {
+      if (kind === "spam") await mail.modifyMessage(row.gmailMessageId, ["SPAM"], ["INBOX", "UNREAD"]);
+      else if (kind === "trash") await mail.trashMessage(row.gmailMessageId);
+      else await mail.modifyMessage(row.gmailMessageId, [done!], ["INBOX"]);
+      ok.push(row.id);
+    } catch (err) {
+      if (rows.length === 1) throw err;
+      console.error(`${kind} failed`, row.gmailMessageId, err);
+    }
+  }
+  if (!ok.length) return 0;
+  await db
+    .update(messages)
+    .set({ status: kind === "archive" ? "done" : "skipped", needsReply: false, unread: false })
+    .where(inArray(messages.id, ok));
+  const action = kind === "spam" ? "spam" : kind === "trash" ? "trashed" : "archived";
+  for (const row of rows.filter((r) => ok.includes(r.id))) await audit(db, user.id, action, row.gmailMessageId);
+  return ok.length;
+}
+
+/** 迷惑メールにした送信者を、今後は届いた時点で迷惑メールへ移すルールにする。自社のアドレスは対象外 */
+async function blockSenders(user: User, rows: MessageRow[]): Promise<number> {
+  const db = await getDb();
+  const own = user.email.slice(user.email.indexOf("@") + 1).toLowerCase();
+  const senders = [...new Set(rows.map((r) => r.fromEmail.toLowerCase()))].filter(
+    (e) => e.includes("@") && e.slice(e.indexOf("@") + 1) !== own,
+  );
+  for (const pattern of senders) {
+    await db
+      .insert(rules)
+      .values({ kind: "sender", pattern, folder: BLOCK_RULE, createdBy: user.id })
+      .onConflictDoUpdate({ target: [rules.kind, rules.pattern], set: { folder: BLOCK_RULE } });
+    await audit(db, user.id, "rule_created", pattern, { kind: "sender", folder: BLOCK_RULE });
+  }
+  return senders.length;
+}
+
 export async function archiveAction(formData: FormData): Promise<void> {
   const { user, row } = await ownMessage(Number(formData.get("rowId")));
   const kind = String(formData.get("kind"));
-  const db = await getDb();
-  const mail = mailFor(user);
-  if (kind === "spam") {
-    await mail.modifyMessage(row.gmailMessageId, ["SPAM"], ["INBOX"]);
-    await audit(db, user.id, "spam", row.gmailMessageId);
-  } else if (kind === "trash") {
-    await mail.trashMessage(row.gmailMessageId);
-    await audit(db, user.id, "trashed", row.gmailMessageId);
-  } else {
-    await mail.modifyMessage(row.gmailMessageId, [await new LabelResolver(mail).statusId("done")], ["INBOX"]);
-    await audit(db, user.id, "archived", row.gmailMessageId);
-  }
-  await db
-    .update(messages)
-    .set({ status: kind === "archive" ? "done" : "skipped", needsReply: false })
-    .where(eq(messages.id, row.id));
+  if (!isRemoveKind(kind)) throw new Error("操作が正しくありません");
+  await removeRows(user, [row], kind);
+  if (kind === "spam" && formData.get("block")) await blockSenders(user, [row]);
+  revalidatePath("/", "layout");
   redirect(safeBack(String(formData.get("back") ?? "")));
+}
+
+async function ownRows(user: User, ids: number[]): Promise<MessageRow[]> {
+  if (!ids.length) return [];
+  const db = await getDb();
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.userId, user.id), inArray(messages.id, ids)));
+  return rows.filter((r) => canSeeMessage(user, r));
+}
+
+function withNotice(back: string, notice: string): string {
+  const url = new URL(back, "http://x");
+  url.searchParams.set("notice", notice);
+  return `${url.pathname}${url.search}`;
+}
+
+const REMOVE_WORDS: Record<RemoveKind, string> = { archive: "アーカイブ", spam: "迷惑メール", trash: "ゴミ箱" };
+
+/**
+ * 一覧でチェックしたメールをまとめて迷惑メール／ゴミ箱／アーカイブにする。
+ * 行の × ボタン（1通だけ）もここに来る。
+ */
+export async function bulkRemoveAction(formData: FormData): Promise<void> {
+  const user = await requireUser();
+  // 行のボタンは "spam:123" のように操作と行をまとめて送る
+  const only = String(formData.get("only") ?? "");
+  const [kind, ...picked] = only ? only.split(":") : [String(formData.get("kind")), ...formData.getAll("sel").map(String)];
+  if (!isRemoveKind(kind)) throw new Error("操作が正しくありません");
+  const ids = picked
+    .map(Number)
+    .filter((n) => Number.isInteger(n) && n > 0)
+    .slice(0, 200);
+  const back = safeBack(String(formData.get("back") ?? ""));
+  const rows = await ownRows(user, ids);
+  if (!rows.length) redirect(back);
+  const n = await removeRows(user, rows, kind);
+  const blocked = kind === "spam" && formData.get("block") ? await blockSenders(user, rows) : 0;
+  revalidatePath("/", "layout");
+  const failed = rows.length - n;
+  redirect(
+    withNotice(
+      back,
+      `${n}件を${REMOVE_WORDS[kind]}にしました` +
+        (blocked ? `（${blocked}件の送信者は今後も自動で迷惑メールへ）` : "") +
+        (failed ? `。${failed}件は失敗しました` : ""),
+    ),
+  );
 }
 
 export async function saveContactAction(formData: FormData): Promise<void> {

@@ -1,4 +1,4 @@
-import { PERSONAL_FOLDER_KEY, isFolder, type Folder } from "../domain";
+import { BLOCK_RULE, PERSONAL_FOLDER_KEY, isFolder, type Folder } from "../domain";
 import { listIdToAddress, type ParsedMessage } from "../mail/parse";
 
 /**
@@ -34,21 +34,34 @@ function domainOf(email: string): string {
   return email.slice(email.lastIndexOf("@") + 1).toLowerCase();
 }
 
-export function matchSenderRule(fromEmail: string | undefined, rules: SenderRule[]): SenderRule | null {
+function matchRule(
+  fromEmail: string | undefined,
+  rules: SenderRule[],
+  accept: (target: string) => boolean,
+): SenderRule | null {
   if (!fromEmail) return null;
   const email = fromEmail.toLowerCase();
-  const exact = rules.find((r) => r.kind === "sender" && r.pattern.toLowerCase() === email && isFolder(r.folder));
+  const exact = rules.find((r) => r.kind === "sender" && r.pattern.toLowerCase() === email && accept(r.folder));
   if (exact) return exact;
   const domain = domainOf(email);
   // サブドメインも含めて一致させる（mail.example.co.jp は example.co.jp のルールに当たる）
   const domainRules = rules
-    .filter((r) => r.kind === "domain" && isFolder(r.folder))
+    .filter((r) => r.kind === "domain" && accept(r.folder))
     .filter((r) => {
       const p = r.pattern.toLowerCase().replace(/^@/, "");
       return domain === p || domain.endsWith(`.${p}`);
     })
     .sort((a, b) => b.pattern.length - a.pattern.length);
   return domainRules[0] ?? null;
+}
+
+export function matchSenderRule(fromEmail: string | undefined, rules: SenderRule[]): SenderRule | null {
+  return matchRule(fromEmail, rules, isFolder);
+}
+
+/** 「今後も迷惑メールへ」にした送信者・ドメインか */
+export function matchBlockRule(fromEmail: string | undefined, rules: SenderRule[]): SenderRule | null {
+  return matchRule(fromEmail, rules, (t) => t === BLOCK_RULE);
 }
 
 export function classifyByHeaders(

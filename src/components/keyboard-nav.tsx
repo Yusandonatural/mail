@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 /**
  * キーボード操作（仕様書 8章）
  * j/k: 一覧で次・前へ　Enter/o: 開く　e: アーカイブ　r: 下書き欄へ　u: 一覧へ戻る　/: 検索
+ * x: 一覧で選んだ行にチェック　!: 迷惑メール　#: ゴミ箱（一覧では選んだ行、メール画面ではそのメール）
  */
 export function KeyboardNav() {
   const router = useRouter();
@@ -35,6 +36,21 @@ export function KeyboardNav() {
         case "Enter":
           if (current >= 0) router.push(rows[current].getAttribute("href") ?? "/inbox");
           break;
+        case "x": {
+          const box = rows[current]?.closest(".row-line")?.querySelector<HTMLInputElement>('input[name="sel"]');
+          if (box) {
+            box.checked = !box.checked;
+            box.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          break;
+        }
+        case "!":
+        case "#": {
+          const attr = ev.key === "!" ? "data-spam" : "data-trash";
+          const scope = rows.length ? rows[current]?.closest(".row-line") : document;
+          scope?.querySelector<HTMLButtonElement>(`button[${attr}]`)?.click();
+          break;
+        }
         case "e":
           document.querySelector<HTMLButtonElement>("button[data-archive]")?.click();
           break;

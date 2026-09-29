@@ -11,7 +11,8 @@ import {
   DATE_KIND_LABELS,
   FOLDER_KEYS,
   folderName,
-  isFolder,
+  ruleTargetName,
+  BLOCK_RULE,
 } from "@/lib/domain";
 import { formatJst } from "@/lib/time";
 import { SubmitButton } from "@/components/submit-button";
@@ -38,7 +39,7 @@ import { pushConfigured } from "@/lib/notify";
 
 const WEEK = ["日", "月", "火", "水", "木", "金", "土"];
 
-function FolderSelect({ name, value }: { name: string; value?: string }) {
+function FolderSelect({ name, value, withBlock }: { name: string; value?: string; withBlock?: boolean }) {
   return (
     <select name={name} defaultValue={value}>
       {FOLDER_KEYS.map((f) => (
@@ -46,6 +47,7 @@ function FolderSelect({ name, value }: { name: string; value?: string }) {
           {folderName(f)}
         </option>
       ))}
+      {withBlock ? <option value={BLOCK_RULE}>{ruleTargetName(BLOCK_RULE)}</option> : null}
     </select>
   );
 }
@@ -228,13 +230,13 @@ export default async function SettingsPage({
 
       <div className="panel">
         <h2>送信者ルール</h2>
-        <p className="meta">宛先より優先します。メール画面で「今後も」を選んで移動すると、ここに自動で追加されます。</p>
+        <p className="meta">宛先より優先します。メール画面で「今後も」を選んで移動すると、ここに自動で追加されます。「迷惑メール（自動）」にした送信者のメールは、届いた時点で迷惑メールへ移します（削除すると元に戻ります）。</p>
         <table className="simple">
           <tbody>
             {ruleRows.map((r) => (
               <tr key={r.id}>
                 <td>{r.kind === "sender" ? r.pattern : `@${r.pattern}（サブドメイン含む）`}</td>
-                <td>{isFolder(r.folder) ? folderName(r.folder) : r.folder}</td>
+                <td>{ruleTargetName(r.folder)}</td>
                 <td className="meta">{formatJst(r.createdAt)}</td>
                 <td>
                   <form action={deleteRuleAction}>
@@ -265,7 +267,7 @@ export default async function SettingsPage({
           </div>
           <div>
             <label>フォルダ</label>
-            <FolderSelect name="folder" value="keiri" />
+            <FolderSelect name="folder" value="keiri" withBlock />
           </div>
           <SubmitButton className="primary">追加</SubmitButton>
         </form>

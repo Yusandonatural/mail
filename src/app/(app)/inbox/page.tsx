@@ -6,13 +6,15 @@ import { canSeeFolder } from "@/lib/access";
 import { folderName, isFolder } from "@/lib/domain";
 import { FILTER_LABELS, listMessages, type ListFilter } from "@/lib/queries";
 import { MessageRowView } from "@/components/message-row";
+import { BulkBar } from "@/components/bulk-bar";
+import { bulkRemoveAction } from "@/app/actions/mail";
 
 const FILTERS = Object.keys(FILTER_LABELS) as ListFilter[];
 
 export default async function InboxPage({
   searchParams,
 }: {
-  searchParams: Promise<{ folder?: string; filter?: string; page?: string }>;
+  searchParams: Promise<{ folder?: string; filter?: string; page?: string; notice?: string }>;
 }) {
   const sp = await searchParams;
   const user = await requireUser();
@@ -46,15 +48,24 @@ export default async function InboxPage({
           ))}
         </div>
       </div>
-      <div className="list">
-        {rows.length ? (
-          rows.map((m) => <MessageRowView key={m.id} m={m} keiri={keiri} showFolder={!folder} back={qs({ page: page || null })} />)
-        ) : (
-          <div className="empty">このフォルダにメールはありません</div>
-        )}
-      </div>
+      {sp.notice ? (
+        <div className="banner confirm" role="status">
+          {sp.notice.slice(0, 200)}。間違えたときは Gmail の「ゴミ箱」「迷惑メール」から30日以内なら戻せます。
+        </div>
+      ) : null}
+      <form action={bulkRemoveAction} className="bulk">
+        <input type="hidden" name="back" value={qs({ page: page || null })} />
+        {rows.length ? <BulkBar /> : null}
+        <div className="list">
+          {rows.length ? (
+            rows.map((m) => <MessageRowView key={m.id} m={m} keiri={keiri} showFolder={!folder} back={qs({ page: page || null })} />)
+          ) : (
+            <div className="empty">このフォルダにメールはありません</div>
+          )}
+        </div>
+      </form>
       <div className="actions" style={{ marginTop: 12, justifyContent: "space-between" }}>
-        <span className="kbd">j / k で移動、Enter で開く、/ で検索</span>
+        <span className="kbd">j / k で移動、Enter で開く、x で選択、! で迷惑メール、# で削除、/ で検索</span>
         <span className="actions">
           {page > 0 ? <Link href={qs({ page: page - 1 })}>← 新しいメール</Link> : null}
           {hasMore ? <Link href={qs({ page: page + 1 })}>古いメール →</Link> : null}

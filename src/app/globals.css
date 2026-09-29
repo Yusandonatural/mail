@@ -184,23 +184,58 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; font-size: 1
 
 /* ---- 一覧：状態は左端の帯で ---- */
 .list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.row-line {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid transparent;
+}
+.row-line:last-child { border-bottom: 0; }
+.row-line:hover, .row-line:focus-within { background: var(--paper); }
+.row-line:has(.row.selected) { background: var(--accent-soft); }
+.row-line:has(input[name="sel"]:checked) { background: var(--vermilion-soft); }
+.row-line.state-urgent { border-left-color: var(--vermilion); }
+.row-line.state-reply { border-left-color: var(--roast); }
+.row-line.state-draft { border-left-color: var(--accent); }
+.row-line.state-review { border-left-color: var(--review); }
+.pick { display: flex; align-items: flex-start; padding: 13px 0 0 11px; cursor: pointer; }
+.pick input { width: 16px; height: 16px; margin: 0; accent-color: var(--vermilion); cursor: pointer; }
 .row {
+  flex: 1;
+  min-width: 0;
   display: grid;
   grid-template-columns: 170px 1fr auto;
   gap: 14px;
-  padding: 11px 16px 11px 14px;
-  border-bottom: 1px solid var(--line);
-  border-left: 3px solid transparent;
+  padding: 11px 16px 11px 11px;
   color: var(--ink);
   align-items: start;
 }
-.row:last-child { border-bottom: 0; }
-.row:hover { background: var(--paper); text-decoration: none; color: var(--ink); }
-.row.selected { background: var(--accent-soft); }
-.row.state-urgent { border-left-color: var(--vermilion); }
-.row.state-reply { border-left-color: var(--roast); }
-.row.state-draft { border-left-color: var(--accent); }
-.row.state-review { border-left-color: var(--review); }
+.row:hover { text-decoration: none; color: var(--ink); }
+/* 行の右端の「迷惑」「削除」：マウスを乗せたときだけ出す */
+.quick { display: flex; align-items: center; gap: 4px; padding-right: 10px; opacity: 0; }
+.row-line:hover .quick, .row-line:focus-within .quick { opacity: 1; }
+.quick button { font-size: 12px; padding: 2px 8px; color: var(--vermilion); background: var(--panel); }
+.quick button:hover { border-color: var(--vermilion); }
+.bulkbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 6px 12px 6px 3px;
+  margin-bottom: 8px;
+  min-height: 40px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+}
+.bulkbar .pick { padding: 0 0 0 11px; align-items: center; }
+.bulkbar.active {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--vermilion-soft);
+  border-color: var(--vermilion);
+}
+.block-opt { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 .row.unread .who, .row.unread .subject { font-weight: 700; }
 .row .who, .row .subject, .row .summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .summary { color: var(--muted); font-size: 13px; }
@@ -295,6 +330,8 @@ details > summary::marker { color: var(--accent); }
   .sidebar form { padding: 0; }
   .main { padding: 14px 16px 40px; }
   .row, .row.keiri { grid-template-columns: 1fr auto; gap: 4px 10px; }
+  /* スマホはマウスを乗せられないので、チェックしてまとめて操作する */
+  .quick { display: none; }
   .row .who { grid-column: 1 / -1; }
   .row .amount, .row .due { display: none; }
   .grid2 { grid-template-columns: 1fr; }

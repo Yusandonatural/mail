@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { addressMap, playbooks, rules, users } from "@/lib/db/schema";
 import { audit } from "@/lib/audit";
-import { DATE_KINDS, FOLDER_KEYS, isCategory, isFolder, type Folder } from "@/lib/domain";
+import { BLOCK_RULE, DATE_KINDS, FOLDER_KEYS, isCategory, isFolder, type Folder } from "@/lib/domain";
 import { putSetting, getSetting } from "@/lib/settings";
 import type { CalendarMap } from "@/lib/db/seed";
 import { requireAdmin } from "@/lib/session";
@@ -48,7 +48,8 @@ export async function saveRuleAction(formData: FormData): Promise<void> {
   const kind = String(formData.get("kind"));
   const pattern = String(formData.get("pattern") ?? "").trim().toLowerCase().replace(/^@/, "");
   const folder = String(formData.get("folder"));
-  if (!["sender", "domain"].includes(kind) || !pattern || !isFolder(folder)) throw new Error("ルールが正しくありません");
+  if (!["sender", "domain"].includes(kind) || !pattern || !(isFolder(folder) || folder === BLOCK_RULE))
+    throw new Error("ルールが正しくありません");
   const db = await getDb();
   await db
     .insert(rules)

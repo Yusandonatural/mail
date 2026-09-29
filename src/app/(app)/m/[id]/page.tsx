@@ -11,6 +11,7 @@ import {
   folderName,
   isCategory,
   isFolder,
+  ruleTargetName,
   LANGUAGE_LABELS,
   type DateKind,
   type Language,
@@ -158,13 +159,20 @@ export default async function MessagePage({
             <input type="hidden" name="rowId" value={row.id} />
             <input type="hidden" name="kind" value="spam" />
             <input type="hidden" name="back" value={back} />
-            <SubmitButton className="danger">迷惑メール</SubmitButton>
+            <SubmitButton className="danger" data-spam>
+              迷惑メール（!）
+            </SubmitButton>
+            <label className="meta block-opt" title={`${row.fromEmail} から今後届くメールも、自動で迷惑メールへ移します`}>
+              <input type="checkbox" name="block" value="1" /> 今後もこの送信者は迷惑メールへ
+            </label>
           </form>
           <form action={archiveAction}>
             <input type="hidden" name="rowId" value={row.id} />
             <input type="hidden" name="kind" value="trash" />
             <input type="hidden" name="back" value={back} />
-            <SubmitButton className="danger">ゴミ箱</SubmitButton>
+            <SubmitButton className="danger" data-trash>
+              削除（#）
+            </SubmitButton>
           </form>
         </div>
       </div>
@@ -437,7 +445,7 @@ export default async function MessagePage({
             {senderRules.length ? (
               <div className="meta" style={{ marginTop: 8 }}>
                 適用中の振り分けルール：
-                {senderRules.map((r) => `${r.kind === "sender" ? r.pattern : `@${r.pattern}`} → ${isFolder(r.folder) ? folderName(r.folder) : r.folder}`).join("、")}
+                {senderRules.map((r) => `${r.kind === "sender" ? r.pattern : `@${r.pattern}`} → ${ruleTargetName(r.folder)}`).join("、")}
               </div>
             ) : null}
             <form action={saveContactAction} className="stack" style={{ marginTop: 8 }}>

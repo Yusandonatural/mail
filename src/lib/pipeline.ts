@@ -1,7 +1,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "./db";
 import { addressMap, contacts, dateCandidates, messages, rules, type User } from "./db/schema";
-import { classifyByHeaders, type SenderRule } from "./classify/stage1";
+import { classifyByHeaders, matchBlockRule, type SenderRule } from "./classify/stage1";
 import { mergeClassification, type MergedClassification } from "./classify/merge";
 import type { Classifier, ContentClassification } from "./classify/types";
 import { DATE_KINDS, STATUS_LABELS, isFolder, type Folder } from "./domain";
@@ -129,6 +129,11 @@ export async function processMessage(
   const from = msg.from;
 
   const { senderRules, addresses } = await loadRules(db);
+  // 「今後も迷惑メールへ」にした送信者：分類せず（Claude も使わず）迷惑メールへ移す
+  if (matchBlockRule(from.email, senderRules)) {
+    await mail.modifyMessage(gmailMessageId, ["SPAM"], ["INBOX", "UNREAD"]);
+    return { kind: "skipped", reason: "blocked" };
+  }
   const stage1 = classifyByHeaders(msg, senderRules, addresses);
 
   let content: ContentClassification | null = null;

@@ -45,6 +45,15 @@ export const PERSONAL_FOLDER_KEY = "personal" as const;
 
 export const FOLDER_KEYS: Folder[] = [...CATEGORIES, PERSONAL_FOLDER_KEY];
 
+/** 送信者ルールの行き先のうち、フォルダではなく「届いたら迷惑メールへ」を表す値 */
+export const BLOCK_RULE = "blocked" as const;
+
+/** 送信者ルールの行き先を表示用の名前にする */
+export function ruleTargetName(target: string): string {
+  if (target === BLOCK_RULE) return "迷惑メール（自動）";
+  return isFolder(target) ? folderName(target) : target;
+}
+
 export function folderName(folder: Folder): string {
   return folder === PERSONAL_FOLDER_KEY ? PERSONAL_FOLDER : CATEGORY_LABELS[folder];
 }

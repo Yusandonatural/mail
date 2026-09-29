@@ -32,29 +32,43 @@ export function MessageRowView({
           : m.needsReview
             ? "state-review"
             : "";
+  // チェックと行ごとのボタンは、一覧を囲む form（bulkRemoveAction）に送られる
   return (
-    <Link href={`/m/${m.id}?back=${encodeURIComponent(back)}`} className={["row", state, keiri ? "keiri" : "", m.unread ? "unread" : ""].filter(Boolean).join(" ")}>
-      <div className="who">{m.fromName || m.fromEmail}</div>
-      <div style={{ minWidth: 0 }}>
-        <div className="subject">{m.subject || "(件名なし)"}</div>
-        <div className="summary">{m.summary}</div>
-        <div className="badges">
-          {m.urgency === "high" && open ? <span className="badge high">至急</span> : null}
-          {open && m.status === "new" ? <span className="badge reply">要返信</span> : null}
-          {m.status === "draft_ready" ? <span className="badge draft">下書きあり</span> : null}
-          {m.needsReview ? <span className="badge review">要確認</span> : null}
-          {m.suggestConfirm ? <span className="badge draft">確定の提案</span> : null}
-          {m.hasDates ? <span className="badge date">日程あり</span> : null}
-          {m.language !== "ja" ? <span className="badge">{LANGUAGE_LABELS[m.language as Language] ?? m.language}</span> : null}
-          {m.hasAttachments ? <span className="badge">添付</span> : null}
-          {m.freeeSent ? <span className="badge draft">freee済</span> : null}
-          {showFolder && isFolder(m.folder) ? <span className="badge">{folderName(m.folder)}</span> : null}
-          {!keiri && m.amount !== null ? <span className="badge">{formatAmount(m.amount, m.currency)}</span> : null}
+    <div className={["row-line", state].filter(Boolean).join(" ")}>
+      <label className="pick" title="選択（x）">
+        <input type="checkbox" name="sel" value={m.id} aria-label={`${m.fromName || m.fromEmail}「${m.subject}」を選択`} />
+      </label>
+      <Link href={`/m/${m.id}?back=${encodeURIComponent(back)}`} className={["row", keiri ? "keiri" : "", m.unread ? "unread" : ""].filter(Boolean).join(" ")}>
+        <div className="who">{m.fromName || m.fromEmail}</div>
+        <div style={{ minWidth: 0 }}>
+          <div className="subject">{m.subject || "(件名なし)"}</div>
+          <div className="summary">{m.summary}</div>
+          <div className="badges">
+            {m.urgency === "high" && open ? <span className="badge high">至急</span> : null}
+            {open && m.status === "new" ? <span className="badge reply">要返信</span> : null}
+            {m.status === "draft_ready" ? <span className="badge draft">下書きあり</span> : null}
+            {m.needsReview ? <span className="badge review">要確認</span> : null}
+            {m.suggestConfirm ? <span className="badge draft">確定の提案</span> : null}
+            {m.hasDates ? <span className="badge date">日程あり</span> : null}
+            {m.language !== "ja" ? <span className="badge">{LANGUAGE_LABELS[m.language as Language] ?? m.language}</span> : null}
+            {m.hasAttachments ? <span className="badge">添付</span> : null}
+            {m.freeeSent ? <span className="badge draft">freee済</span> : null}
+            {showFolder && isFolder(m.folder) ? <span className="badge">{folderName(m.folder)}</span> : null}
+            {!keiri && m.amount !== null ? <span className="badge">{formatAmount(m.amount, m.currency)}</span> : null}
+          </div>
         </div>
+        {keiri ? <div className="amount">{formatAmount(m.amount, m.currency)}</div> : null}
+        {keiri ? <div className="due meta">{m.dueDate ? `期限 ${m.dueDate}` : ""}</div> : null}
+        <div className="when">{formatJst(m.receivedAt)}</div>
+      </Link>
+      <div className="quick">
+        <button type="submit" name="only" value={`spam:${m.id}`} data-spam title="迷惑メールにする（!）">
+          迷惑
+        </button>
+        <button type="submit" name="only" value={`trash:${m.id}`} data-trash title="ゴミ箱へ（#）">
+          削除
+        </button>
       </div>
-      {keiri ? <div className="amount">{formatAmount(m.amount, m.currency)}</div> : null}
-      {keiri ? <div className="due meta">{m.dueDate ? `期限 ${m.dueDate}` : ""}</div> : null}
-      <div className="when">{formatJst(m.receivedAt)}</div>
-    </Link>
+    </div>
   );
 }
