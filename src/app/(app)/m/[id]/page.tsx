@@ -204,8 +204,8 @@ export default async function MessagePage({
       ) : null}
 
       <div className="detail">
-        <div>
-          <div className="panel">
+        <div className="col-main">
+          <div className="panel p-summary">
             <h1>{row.subject || "(件名なし)"}</h1>
             <div className="badges" style={{ marginBottom: 10 }}>
               {isFolder(row.folder) ? <span className="badge draft">{folderName(row.folder)}</span> : null}
@@ -255,19 +255,24 @@ export default async function MessagePage({
             </details>
           </div>
 
-          <div className="panel">
-            {thread.map((m) => {
+          <div className="panel p-thread">
+            {thread.length > 1 ? <p className="meta thread-note">新しいメールが上です（全{thread.length}通）。古いメールは押すと開きます</p> : null}
+            {[...thread].reverse().map((m, i) => {
               const ours = m.labelIds.includes("SENT") || m.from?.email === user.email;
+              // 一番新しいメールと、このメール自身は開いておく
+              const open = i === 0 || m.id === row.gmailMessageId;
               return (
-                <div key={m.id} className={ours ? "msg ours" : "msg"}>
-                  <div className="msg-head">
+                <details key={m.id} className={ours ? "msg ours" : "msg"} open={open}>
+                  <summary className="msg-head">
                     <span>
                       <strong>{m.from?.name || m.from?.email}</strong> {m.from?.name ? `<${m.from.email}>` : ""}
+                      {ours ? <span className="badge">送信済み</span> : null}
                       <br />
-                      宛先：{[...m.to, ...m.cc].map((a) => a.email).join(", ")}
+                      <span className="msg-to">宛先：{[...m.to, ...m.cc].map((a) => a.email).join(", ")}</span>
+                      <span className="msg-snippet">{(stripQuoted(m.text) || m.text).replace(/\s+/g, " ").slice(0, 90)}</span>
                     </span>
                     <span>{formatJst(m.date)}</span>
-                  </div>
+                  </summary>
                   {m.html ? <HtmlFrame html={m.html} showImages={images === "1"} /> : <pre>{m.text}</pre>}
                   {!isMostlyJapanese(stripQuoted(m.text) || m.text) ? (
                     <Translation rowId={row.id} gmailMessageId={m.id} />
@@ -288,7 +293,7 @@ export default async function MessagePage({
                       ))}
                     </div>
                   ) : null}
-                </div>
+                </details>
               );
             })}
             {thread.some((m) => m.html) && images !== "1" ? (
@@ -304,23 +309,25 @@ export default async function MessagePage({
           </div>
         </div>
 
-        <div>
-          {loadError ? null : draftViews.length ? (
-            draftViews.map((d, i) => (
-              <DraftEditor
-                key={`${d.id}-${d.version}-${d.gmailMessageId}`}
-                draft={d}
-                rowId={row.id}
-                clientId={clientId}
-                userEmail={user.email}
-                label={draftViews.length > 1 ? (i === 0 ? "返信下書き（最新の案）" : `別案 ${i}`) : "返信下書き"}
-                replyLanguage={row.language === "ja" ? "en" : row.language}
-                backHref={back}
-              />
-            ))
-          ) : (
-            <DraftCreate rowId={row.id} />
-          )}
+        <div className="col-side">
+          <div className="p-reply">
+            {loadError ? null : draftViews.length ? (
+              draftViews.map((d, i) => (
+                <DraftEditor
+                  key={`${d.id}-${d.version}-${d.gmailMessageId}`}
+                  draft={d}
+                  rowId={row.id}
+                  clientId={clientId}
+                  userEmail={user.email}
+                  label={draftViews.length > 1 ? (i === 0 ? "返信下書き（最新の案）" : `別案 ${i}`) : "返信下書き"}
+                  replyLanguage={row.language === "ja" ? "en" : row.language}
+                  backHref={back}
+                />
+              ))
+            ) : (
+              <DraftCreate rowId={row.id} />
+            )}
+          </div>
 
           {candidates.length ? (
             <div className="panel">

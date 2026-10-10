@@ -269,7 +269,15 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; font-size: 1
 .banner.error { background: var(--vermilion-soft); border-left-color: var(--vermilion); color: var(--ink); }
 .msg { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
 .msg:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
-.msg-head { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 13px; margin-bottom: 10px; flex-wrap: wrap; }
+.thread-note { margin: 0 0 10px; }
+.msg-head { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 13px; margin-bottom: 10px; flex-wrap: wrap; cursor: pointer; list-style: none; }
+.msg-head::-webkit-details-marker { display: none; }
+.msg-head .badge { margin-left: 6px; }
+/* 閉じた古いメールは、宛先の代わりに本文の冒頭を1行だけ見せる */
+.msg-snippet { display: none; }
+.msg:not([open]) .msg-head { margin-bottom: 0; }
+.msg:not([open]) .msg-to { display: none; }
+.msg:not([open]) .msg-snippet { display: block; max-width: 60ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg-head strong { color: var(--ink); }
 .msg.ours { background: var(--paper); border-radius: var(--radius); padding: 12px 14px; border-left: 3px solid var(--line-strong); }
 .mail-frame { width: 100%; min-height: 360px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
@@ -314,7 +322,13 @@ details > summary::marker { color: var(--accent); }
 .login h1 { font-size: 24px; margin: 0; }
 
 @media (max-width: 1100px) {
-  .detail { grid-template-columns: 1fr; }
+  /* 1列のときは「件名・要約 → 返信下書き → やり取り → 日程など」の順に並べる */
+  .detail { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .col-main, .col-side { display: contents; }
+  .p-summary { order: 1; }
+  .col-side > * { order: 4; }
+  .col-side > .p-reply { order: 2; }
+  .p-thread { order: 3; }
 }
 @media (max-width: 760px) {
   .app { grid-template-columns: 1fr; }
