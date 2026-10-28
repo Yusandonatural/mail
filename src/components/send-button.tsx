@@ -82,7 +82,15 @@ function requestToken(clientId: string, email: string): Promise<string> {
   return loadGis().then(ask);
 }
 
-async function sendDraft(token: string, draftId: string): Promise<void> {
+export interface SentMessage {
+  gmailDraftId: string;
+  email: string;
+  /** Gmail が返した、送ったメールの ID とスレッド */
+  messageId: string;
+  threadId: string;
+}
+
+async function sendDraft(token: string, draftId: string): Promise<{ id: string; threadId: string }> {
   const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts/send", {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -91,8 +99,18 @@ async function sendDraft(token: string, draftId: string): Promise<void> {
   if (!res.ok) {
     if (res.status === 401) cached = null;
     const detail = await res.text().catch(() => "");
-    throw new Error(`送信に失敗しました（${res.status}）${detail ? `: ${detail.slice(0, 200)}` : ""}`);
+    throw new Error(`送信できませんでした（${res.status}）${detail ? `: ${detail.slice(0, 200)}` : ""}`);
   }
+  const body = (await res.json().catch(() => ({}))) as { id?: string; threadId?: string };
+  return { id: body.id ?? "", threadId: body.threadId ?? "" };
+}
+
+/** 送信後に開く一覧の URL に「送信しました」の知らせを付ける（画面上部の帯に出る） */
+export function withSentNotice(href: string, text: string, threadId: string): string {
+  const url = new URL(href, "http://x");
+  url.searchParams.set("notice", text);
+  if (threadId) url.searchParams.set("sent", threadId);
+  return `${url.pathname}${url.search}`;
 }
 
 type Prepared = { ok: true; data?: { gmailDraftId: string; email: string } } | { ok: false; error: string };
@@ -109,12 +127,13 @@ export function SendButton({
   email: string;
   disabled?: boolean;
   prepare: () => Promise<Prepared>;
-  after: (sent: { gmailDraftId: string; email: string }) => Promise<void>;
+  after: (sent: SentMessage) => Promise<void>;
   label?: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
 
   useEffect(() => {
     loadGis().catch(() => undefined);
@@ -141,8 +160,14 @@ export function SendButton({
         const r = await prepare();
         if (!r.ok) throw new Error(r.error);
         if (!r.data) throw new Error("下書きが見つかりません");
-        await sendDraft(await token, r.data.gmailDraftId);
-        await after(r.data);
+        const msg = await sendDraft(await token, r.data.gmailDraftId);
+        // ここまで来れば相手に届いている。後の記録で失敗しても「送れていない」とは言わない
+        setSent(true);
+        try {
+          await after({ ...r.data, messageId: msg.id, threadId: msg.threadId });
+        } catch (e) {
+          setError(`送信はできました。アプリへの記録だけ失敗しました（${e instanceof Error ? e.message : String(e)}）。もう一度送らないでください`);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -154,10 +179,16 @@ export function SendButton({
 
   return (
     <span className="actions">
-      <button type="button" className="primary" disabled={disabled || busy} onClick={onClick}>
-        {busy ? "送信中…" : confirming ? "もう一度押すと送信します" : label}
-      </button>
-      {confirming ? (
+      {sent ? (
+        <span className="sent-ok" role="status">
+          ✓ 送信しました
+        </span>
+      ) : (
+        <button type="button" className="primary" disabled={disabled || busy} onClick={onClick}>
+          {busy ? "送信中…" : confirming ? "もう一度押すと送信します" : label}
+        </button>
+      )}
+      {confirming && !sent ? (
         <button type="button" onClick={() => setConfirming(false)}>
           やめる
         </button>

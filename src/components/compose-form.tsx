@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { findPlaceholders } from "@/lib/placeholders";
 import { createComposeDraft, recordComposeSent } from "@/app/actions/compose";
-import { SendButton } from "./send-button";
+import { SendButton, withSentNotice } from "./send-button";
 
 export interface ComposeDefaults {
   from: string;
@@ -92,7 +92,7 @@ export function ComposeForm({
           }}
           after={async (sent) => {
             await recordComposeSent(sent.gmailDraftId, v.subject);
-            router.push("/inbox");
+            router.push(withSentNotice("/inbox", `「${v.subject || "(件名なし)"}」を送信しました`, sent.threadId));
           }}
         />
         <button

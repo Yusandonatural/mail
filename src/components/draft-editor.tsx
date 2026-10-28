@@ -6,7 +6,7 @@ import { findPlaceholders } from "@/lib/placeholders";
 import { translateReplyAction } from "@/app/actions/translate";
 import { LANGUAGE_LABELS, LANGUAGES } from "@/lib/domain";
 import { emptyReplyAction, generateDraftAction, markSentAction, prepareSendAction, saveDraftAction } from "@/app/actions/mail";
-import { SendButton } from "./send-button";
+import { SendButton, withSentNotice } from "./send-button";
 
 const PRESETS = ["もっと短く", "もっと丁寧に", "英語で", "日本語で"];
 
@@ -79,9 +79,9 @@ export function DraftEditor({
           email={userEmail}
           disabled={placeholders.length > 0 || pending}
           prepare={() => prepareSendAction(draft.id, text)}
-          after={async () => {
+          after={async (sent) => {
             await markSentAction(draft.id);
-            router.push(backHref);
+            router.push(withSentNotice(backHref, "返信を送信しました", sent.threadId));
             router.refresh();
           }}
         />

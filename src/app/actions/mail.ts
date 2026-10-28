@@ -313,7 +313,8 @@ export async function bulkRemoveAction(formData: FormData): Promise<void> {
       back,
       `${n}件を${REMOVE_WORDS[kind]}にしました` +
         (blocked ? `（${blocked}件の送信者は今後も自動で迷惑メールへ）` : "") +
-        (failed ? `。${failed}件は失敗しました` : ""),
+        (failed ? `。${failed}件は失敗しました` : "") +
+        (kind === "archive" ? "" : "。間違えたときは Gmail の「ゴミ箱」「迷惑メール」から30日以内なら戻せます"),
     ),
   );
 }

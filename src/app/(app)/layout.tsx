@@ -7,6 +7,7 @@ import { folderCounts, totalReplyCount } from "@/lib/queries";
 import { NavLink } from "@/components/nav-link";
 import { KeyboardNav } from "@/components/keyboard-nav";
 import { NotifyToggle } from "@/components/notify-toggle";
+import { NoticeBanner } from "@/components/notice-banner";
 import { vapidPublicKey } from "@/lib/notify";
 
 export const dynamic = "force-dynamic";
@@ -65,7 +66,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <button type="submit">ログアウト</button>
         </form>
       </aside>
-      <main className="main">{children}</main>
+      <main className="main">
+        <Suspense>
+          <NoticeBanner userEmail={user.email} />
+        </Suspense>
+        {children}
+      </main>
       <KeyboardNav />
     </div>
   );

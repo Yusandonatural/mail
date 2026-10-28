@@ -14,7 +14,7 @@ const FILTERS = Object.keys(FILTER_LABELS) as ListFilter[];
 export default async function InboxPage({
   searchParams,
 }: {
-  searchParams: Promise<{ folder?: string; filter?: string; page?: string; notice?: string }>;
+  searchParams: Promise<{ folder?: string; filter?: string; page?: string }>;
 }) {
   const sp = await searchParams;
   const user = await requireUser();
@@ -48,11 +48,6 @@ export default async function InboxPage({
           ))}
         </div>
       </div>
-      {sp.notice ? (
-        <div className="banner confirm" role="status">
-          {sp.notice.slice(0, 200)}。間違えたときは Gmail の「ゴミ箱」「迷惑メール」から30日以内なら戻せます。
-        </div>
-      ) : null}
       <form action={bulkRemoveAction} className="bulk">
         <input type="hidden" name="back" value={qs({ page: page || null })} />
         {rows.length ? <BulkBar /> : null}

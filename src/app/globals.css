@@ -266,6 +266,9 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; font-size: 1
 .banner { border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-left: 3px solid transparent; }
 .banner.review { background: var(--review-soft); border-left-color: var(--review); }
 .banner.confirm { background: var(--accent-soft); border-left-color: var(--accent); }
+.banner.sent { background: var(--accent-soft); border-left-color: var(--accent); font-weight: 700; }
+.sent-mark { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: var(--paper); font-size: 13px; }
+.sent-ok { color: var(--accent); font-weight: 700; padding: 6px 4px; }
 .banner.error { background: var(--vermilion-soft); border-left-color: var(--vermilion); color: var(--ink); }
 .msg { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
 .msg:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
