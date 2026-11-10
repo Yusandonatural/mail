@@ -64,14 +64,20 @@ function unsorted(): SQL {
 export async function listMessages(
   db: Db,
   user: User,
-  opts: { folder: Folder | null; filter: ListFilter; page: number; pageSize?: number },
+  opts: { folder: Folder | null; filter: ListFilter; page: number; pageSize?: number; excludeDrafts?: boolean },
 ): Promise<ListedMessage[]> {
   const size = opts.pageSize ?? 50;
   const visible = visibleFolders(user);
   const conds: SQL[] = [eq(messages.userId, user.id), sql`${messages.status} <> 'skipped'`];
   if (opts.folder) conds.push(inFolder(opts.folder));
-  // 「受信箱（全て）」には振り分け前のメールだけを出す（ニュースレターも出さない）
-  else conds.push(or(...visible.filter((f) => f !== "info").map(inFolder))!, sql`${messages.folder} <> 'info'`, unsorted());
+  else {
+    conds.push(or(...visible.filter((f) => f !== "info").map(inFolder))!, sql`${messages.folder} <> 'info'`);
+    // 「受信箱（全て）」には振り分け前のメールだけを出す。
+    // ただし「下書きあり」は、Claude の下書きをまとめて確認できるよう全フォルダから出す
+    if (opts.filter !== "draft") conds.push(unsorted());
+  }
+  // 受信箱（全て）では、下書きのあるメールは上の「Claude の返信下書き」にまとめて出す
+  if (opts.excludeDrafts) conds.push(sql`${messages.status} <> 'draft_ready'`);
   if (opts.filter === "reply") conds.push(and(eq(messages.needsReply, true), inArray(messages.status, ["new", "draft_ready"]))!);
   if (opts.filter === "draft") conds.push(eq(messages.status, "draft_ready"));
   if (opts.filter === "review") conds.push(eq(messages.needsReview, true));

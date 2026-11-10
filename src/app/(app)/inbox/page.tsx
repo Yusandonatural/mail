@@ -10,6 +10,7 @@ import { BulkBar } from "@/components/bulk-bar";
 import { bulkRemoveAction } from "@/app/actions/mail";
 
 const FILTERS = Object.keys(FILTER_LABELS) as ListFilter[];
+const DRAFTS_SHOWN = 10;
 
 export default async function InboxPage({
   searchParams,
@@ -23,7 +24,10 @@ export default async function InboxPage({
   const filter: ListFilter = FILTERS.includes(sp.filter as ListFilter) ? (sp.filter as ListFilter) : "all";
   const page = Math.max(0, Number(sp.page ?? 0) || 0);
   const db = await getDb();
-  const fetched = await listMessages(db, user, { folder, filter, page });
+  // 受信箱（全て）の一番上に、Claude が作った返信下書きを全フォルダからまとめて出す（朝の確認用）
+  const showDrafts = !folder && filter === "all";
+  const draftRows = showDrafts && page === 0 ? await listMessages(db, user, { folder: null, filter: "draft", page: 0, pageSize: DRAFTS_SHOWN }) : [];
+  const fetched = await listMessages(db, user, { folder, filter, page, excludeDrafts: showDrafts });
   const hasMore = fetched.length > 50;
   const rows = fetched.slice(0, 50);
   const keiri = folder === "keiri";
@@ -50,13 +54,34 @@ export default async function InboxPage({
       </div>
       <form action={bulkRemoveAction} className="bulk">
         <input type="hidden" name="back" value={qs({ page: page || null })} />
-        {rows.length ? <BulkBar /> : null}
+        {rows.length || draftRows.length ? <BulkBar /> : null}
+        {draftRows.length ? (
+          <section className="draft-queue" aria-labelledby="draft-queue-title">
+            <div className="draft-queue-head">
+              <h2 id="draft-queue-title">Claude の返信下書き</h2>
+              <span className="meta">
+                確認して送るだけのメール {draftRows.length > DRAFTS_SHOWN ? `${DRAFTS_SHOWN}件以上` : `${draftRows.length}件`}・全フォルダから新しい順
+              </span>
+              {draftRows.length > DRAFTS_SHOWN ? <Link href={qs({ filter: "draft" })}>すべて見る →</Link> : null}
+            </div>
+            <div className="list">
+              {draftRows.slice(0, DRAFTS_SHOWN).map((m) => (
+                <MessageRowView key={m.id} m={m} keiri={false} showFolder back={qs({ page: page || null })} />
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {draftRows.length && rows.length ? <h2 className="list-title">そのほかの振り分け前のメール</h2> : null}
         <div className="list">
           {rows.length ? (
             rows.map((m) => <MessageRowView key={m.id} m={m} keiri={keiri} showFolder={!folder} back={qs({ page: page || null })} />)
           ) : (
             <div className="empty">
-              {folder ? "このフォルダにメールはありません" : "振り分け前のメールはありません。左の各フォルダをご覧ください"}
+              {folder
+                ? "このフォルダにメールはありません"
+                : draftRows.length
+                  ? "ほかに振り分け前のメールはありません"
+                  : "振り分け前のメールはありません。左の各フォルダをご覧ください"}
             </div>
           )}
         </div>

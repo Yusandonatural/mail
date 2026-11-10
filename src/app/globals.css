@@ -183,6 +183,13 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; font-size: 1
 .filters a.active { color: var(--ink); font-weight: 700; border-bottom-color: var(--accent); }
 
 /* ---- 一覧：状態は左端の帯で ---- */
+/* 受信箱（全て）の一番上：Claude の返信下書き */
+.draft-queue { margin-bottom: 18px; }
+.draft-queue-head { display: flex; align-items: baseline; gap: 6px 12px; flex-wrap: wrap; margin: 0 2px 8px; }
+.draft-queue-head h2 { margin: 0; font-size: 16px; }
+.draft-queue-head a { margin-left: auto; font-size: 13px; }
+.draft-queue .list { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.list-title { font-size: 14px; color: var(--muted); margin: 0 2px 8px; font-weight: 600; }
 .list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .row-line {
   display: flex;

@@ -88,3 +88,21 @@ describe("一覧の並び順", () => {
     expect(rows.map((r) => r.gmailMessageId)).toEqual(["new-normal", "old-urgent"]);
   });
 });
+
+describe("Claude の返信下書き（受信箱の一番上）", () => {
+  it("下書きありは全フォルダから出し、振り分け前の一覧からは外す", async () => {
+    const db = await testDb();
+    const user = await makeUser(db);
+    const base = { userId: user.id, fromEmail: "a@b.c", source: "address", receivedAt: new Date(), needsReply: true };
+    await db.insert(messages).values([
+      { ...base, gmailMessageId: "tour-draft", gmailThreadId: "t1", folder: "tour", status: "draft_ready" },
+      { ...base, gmailMessageId: "personal-draft", gmailThreadId: "t2", folder: "personal", status: "draft_ready" },
+      { ...base, gmailMessageId: "personal-new", gmailThreadId: "t3", folder: "personal", status: "new" },
+      { ...base, gmailMessageId: "news-draft", gmailThreadId: "t4", folder: "info", status: "draft_ready" },
+    ]);
+    const drafts = await listMessages(db, user, { folder: null, filter: "draft", page: 0 });
+    expect(drafts.map((r) => r.gmailMessageId).sort()).toEqual(["personal-draft", "tour-draft"]);
+    const rest = await listMessages(db, user, { folder: null, filter: "all", page: 0, excludeDrafts: true });
+    expect(rest.map((r) => r.gmailMessageId)).toEqual(["personal-new"]);
+  });
+});
