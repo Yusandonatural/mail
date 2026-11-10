@@ -142,6 +142,20 @@ export class GoogleMailApi implements MailApi {
     return this.toRef(res.data);
   }
 
+  async listDrafts(max: number) {
+    const out: Array<{ draftId: string; messageId: string; threadId: string }> = [];
+    let pageToken: string | undefined;
+    do {
+      const res = await this.api.users.drafts.list({ userId: "me", pageToken, maxResults: Math.min(500, max - out.length) });
+      for (const d of res.data.drafts ?? []) {
+        if (d.id && d.message?.id && d.message.threadId)
+          out.push({ draftId: d.id, messageId: d.message.id, threadId: d.message.threadId });
+      }
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken && out.length < max);
+    return out;
+  }
+
   async getDraft(draftId: string) {
     try {
       const res = await this.api.users.drafts.get({ userId: "me", id: draftId, format: "full" });

@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import type { Db } from "./db";
 import { contacts, drafts, messages, playbooks, type DraftRow, type User } from "./db/schema";
 import type { DraftWriter, ThreadMessageForDraft } from "./claude/drafter";
@@ -63,6 +63,56 @@ export async function latestDraft(db: Db, userId: number, threadId: string): Pro
   return rows[0] ?? null;
 }
 
+/**
+ * Gmail で作られた下書き（Claude のスキルや Gmail の画面で作ったもの）をアプリに取り込む。
+ * アプリが知っているスレッドの返信下書きだけを対象にし、取り込んだメールは「下書きあり」にする。
+ * threadId を渡せばそのスレッドだけ。戻り値は取り込んだ件数。
+ */
+export async function adoptGmailDrafts(db: Db, mail: MailApi, user: User, threadId?: string): Promise<number> {
+  const gmailDrafts = (await mail.listDrafts(200)).filter((d) => !threadId || d.threadId === threadId);
+  if (!gmailDrafts.length) return 0;
+  const known = new Set(
+    (
+      await db
+        .select({ id: drafts.gmailDraftId })
+        .from(drafts)
+        .where(and(eq(drafts.userId, user.id), inArray(drafts.gmailDraftId, gmailDrafts.map((d) => d.draftId))))
+    ).map((r) => r.id),
+  );
+  let adopted = 0;
+  let labels: LabelResolver | null = null;
+  for (const d of gmailDrafts) {
+    if (known.has(d.draftId)) continue;
+    const rows = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.userId, user.id), eq(messages.gmailThreadId, d.threadId), ne(messages.status, "skipped")))
+      .orderBy(desc(messages.receivedAt), desc(messages.id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) continue; // 新規作成の下書きや、アプリが扱っていないスレッド
+    const current = await mail.getDraft(d.draftId);
+    if (!current) continue;
+    await db.insert(drafts).values({
+      userId: user.id,
+      gmailThreadId: d.threadId,
+      replyToMessageId: row.gmailMessageId,
+      gmailDraftId: d.draftId,
+      bodyHash: bodyHash(draftText(parseMessage(current.message))),
+      notes: "Gmail で作られた下書きです（Claude のスキルや Gmail の画面で作成）",
+      generatedBy: "gmail",
+    });
+    await db
+      .update(messages)
+      .set({ status: "draft_ready" })
+      .where(and(eq(messages.userId, user.id), eq(messages.gmailThreadId, d.threadId), eq(messages.status, "new")));
+    labels ??= new LabelResolver(mail);
+    await mail.modifyMessage(row.gmailMessageId, [await labels.statusId("draftReady")], []).catch(() => undefined);
+    adopted++;
+  }
+  return adopted;
+}
+
 export async function generateDraft(
   deps: DraftDeps,
   user: User,
@@ -78,6 +128,12 @@ export async function generateDraft(
   const target =
     parsed.find((m) => m.id === replyToMessageId) ?? [...parsed].reverse().find((m) => !isOurs(m)) ?? null;
   if (!target || !target.from) return { kind: "skipped", reason: "返信する相手のメールがありません" };
+
+  // Claude のスキルなどで Gmail に下書きが既にあれば、自動では作らずそれを取り込む
+  if (opts.generatedBy === "auto" && (thread.messages ?? []).some((m) => m.labelIds?.includes("DRAFT"))) {
+    await adoptGmailDrafts(db, mail, user, threadId);
+    if (await latestDraft(db, user.id, threadId)) return { kind: "skipped", reason: "下書きが既にあります" };
+  }
 
   const previous = await latestDraft(db, user.id, threadId);
   let previousText: string | null = null;

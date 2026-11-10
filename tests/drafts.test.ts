@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { drafts, messages } from "@/lib/db/schema";
-import { generateDraft, saveDraftText } from "@/lib/drafts";
+import { adoptGmailDrafts, generateDraft, saveDraftText } from "@/lib/drafts";
+import { buildMime } from "@/lib/mail/mime";
 import type { DraftRequest, DraftWriter } from "@/lib/claude/drafter";
 import { parseDraftOutput } from "@/lib/claude/drafter";
 import { parseMessage } from "@/lib/mail/parse";
@@ -144,5 +145,32 @@ describe("Claude の出力の読み取り", () => {
   });
   it("タグが無ければ全体を本文とみなす", () => {
     expect(parseDraftOutput("こんにちは")).toEqual({ notes: "", body: "こんにちは" });
+  });
+});
+
+describe("Gmail で作られた下書きの取り込み", () => {
+  const raw = buildMime({ to: [{ name: "Ben", email: "ben@adventcha.example" }], subject: "Re: Matcha 5kg", text: "Hi Ben, (Claude のスキルで作成)" });
+
+  it("アプリが扱うスレッドの下書きだけを取り込み、下書きありにする。2回目は取り込まない", async () => {
+    const { db, user, mail } = await setup();
+    const ref = await mail.createDraft(raw, "t1");
+    await mail.createDraft(raw, "unknown-thread");
+    expect(await adoptGmailDrafts(db, mail, user)).toBe(1);
+    const [d] = await db.select().from(drafts);
+    expect(d).toMatchObject({ gmailDraftId: ref.draftId, gmailThreadId: "t1", replyToMessageId: "m1", generatedBy: "gmail", status: "ready" });
+    const [m] = await db.select().from(messages);
+    expect(m.status).toBe("draft_ready");
+    expect(await adoptGmailDrafts(db, mail, user)).toBe(0);
+  });
+
+  it("Gmail に下書きが既にあれば、自動では新しく作らない", async () => {
+    const { db, user, mail, drafter, deps } = await setup();
+    const ref = await mail.createDraft(raw, "t1");
+    mail.add(gmailMessage({ id: ref.messageId, threadId: "t1", from: "isozaki@yusando.com", text: "draft", labelIds: ["DRAFT"] }));
+    const r = await generateDraft(deps, user, "t1", "m1", { generatedBy: "auto" });
+    expect(r.kind).toBe("skipped");
+    expect(drafter.requests).toHaveLength(0);
+    expect(mail.drafts.size).toBe(1);
+    expect((await db.select().from(drafts)).map((d) => d.generatedBy)).toEqual(["gmail"]);
   });
 });

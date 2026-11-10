@@ -21,7 +21,7 @@ import { parseMessage, type ParsedMessage } from "@/lib/mail/parse";
 import { safeBack, threadCandidates, threadDrafts } from "@/lib/queries";
 import { defaultEdits, eventsForDays, gmailThreadLink } from "@/lib/calendar-service";
 import { formatJst, jstIso, parseDateish } from "@/lib/time";
-import { draftText } from "@/lib/drafts";
+import { adoptGmailDrafts, draftText } from "@/lib/drafts";
 import type { CalendarApi, CalendarEvent, CalendarInfo } from "@/lib/google/calendar-api";
 import type { MailApi } from "@/lib/google/mail-api";
 import { HtmlFrame } from "@/components/html-frame";
@@ -77,9 +77,12 @@ export default async function MessagePage({
   try {
     mail = mailFor(user);
     calendar = calendarFor(user);
-    thread = ((await mail.getThread(row.gmailThreadId)).messages ?? [])
-      .map(parseMessage)
-      .filter((m) => !m.labelIds.includes("DRAFT"));
+    const all = ((await mail.getThread(row.gmailThreadId)).messages ?? []).map(parseMessage);
+    thread = all.filter((m) => !m.labelIds.includes("DRAFT"));
+    // Claude のスキルや Gmail の画面で作った下書きがあれば、下書き欄に出せるよう取り込む
+    if (all.some((m) => m.labelIds.includes("DRAFT"))) {
+      await adoptGmailDrafts(db, mail, user, row.gmailThreadId).catch((e) => console.error("adopt drafts failed", e));
+    }
   } catch (err) {
     loadError = err instanceof Error ? err.message : String(err);
   }

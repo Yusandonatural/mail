@@ -130,6 +130,12 @@ export class FakeMail implements MailApi {
     this.drafts.set(draftId, { raw, threadId, messageId: existing.messageId });
     return { draftId, messageId: existing.messageId, threadId };
   }
+  async listDrafts(max: number) {
+    return [...this.drafts.entries()]
+      .filter(([, d]) => d.threadId)
+      .slice(0, max)
+      .map(([draftId, d]) => ({ draftId, messageId: d.messageId, threadId: d.threadId! }));
+  }
   async getDraft(draftId: string) {
     const d = this.drafts.get(draftId);
     if (!d) return null;

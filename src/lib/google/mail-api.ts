@@ -43,6 +43,8 @@ export interface MailApi {
   createDraft(raw: string, threadId: string | null): Promise<DraftRef>;
   updateDraft(draftId: string, raw: string, threadId: string | null): Promise<DraftRef>;
   /** 無ければ（送信済み・削除済み）null */
+  /** Gmail にある下書きの一覧（新しい順、最大 max 件） */
+  listDrafts(max: number): Promise<Array<{ draftId: string; messageId: string; threadId: string }>>;
   getDraft(draftId: string): Promise<{ draftId: string; message: GmailMessage } | null>;
   getAttachment(messageId: string, attachmentId: string): Promise<Buffer>;
   sendAsAddresses(): Promise<Address[]>;
