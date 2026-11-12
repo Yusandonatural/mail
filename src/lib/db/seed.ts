@@ -144,15 +144,15 @@ export const DEFAULT_PLAYBOOKS: Record<Category, string> = {
 - 次の一歩を示す：価格表、サンプル、短い打合せのいずれか。
 - 既知の取引先（Adventcha/Benjamin、TEA TEA TEA、Matchado）には改まった前置きを省き、これまでの関係の続きとして書く。
 例（英語・新規・抹茶5kg）:
-"Hi [Name], thank you for reaching out — wonderful to hear you're interested in our Uji matcha. We'd be glad to supply 5kg. So I can send accurate details: is this for resale or in-house use, and where would it ship to? Our matcha is stone-milled from natural-cultivation tea. I can put together pricing and lead time — 【要確認：kg単価・MOQ】 — and send a sample if useful. Looking forward to it. — Ryotaro"`,
-  order: `- 注文情報が渡されていれば注文番号に触れる。状況や追跡番号を推測で書かない。
+"Hi [Name], thank you for reaching out — wonderful to hear you're interested in our matcha for an order of around 5kg. So I can send accurate details: is this for resale or in-house use, and where would it ship to? Our matcha is stone-milled from natural-cultivation tea. I can put together pricing and lead time — 【要確認：kg単価・MOQ】 — and send a sample if useful. Looking forward to it. — Ryotaro"`,
+  order: `- find_orders で見つかった注文なら注文番号に触れる。状況や追跡番号を推測で書かない。
 - 冒頭で具体的な答え（状況・次に何が起きるか）を書く。
 - 【要確認】：返金、交換、発送中の住所変更、補償。
 - 短く安心させる。謝りすぎない。`,
   tour: `- 茶園を案内できることを喜んでいると伝える。
 - 日程・人数・言語・関心など、計画を決める条件を確認する。
 - 【要確認】：確定の日時と料金。約束せず提案する。
-- 空き時間の候補が渡されていれば 2〜3 案を示し、相手が選ぶだけにする。`,
+- カレンダーで調べた空きの候補を 2〜3 案示し、相手が選ぶだけにする。`,
   cafe: `- 正直に「開店準備中」と伝える。開店日は確認されていない限り断定しない。
 - DIY 改修で場所ができていく楽しさは伝えてよいが、守れない約束はしない。
 - 予約の依頼には感謝し、まだ予約を受けていないこと（または【要確認】）と、開店したら知らせることを伝える。`,
@@ -172,7 +172,7 @@ export const DEFAULT_PLAYBOOKS: Record<Category, string> = {
 - 入会や提携の問合せには歓迎し次の手順を示す。正式な約束に当たる部分は【要確認】。`,
   intern: `- 応募への感謝。受入れの可否は決めずに、時期・期間・希望する作業・滞在方法を確認する。
 - 【要確認】：受入れ可否、期間、宿泊、費用、面談日時。
-- 面談の候補時間が渡されていれば 2〜3 案を示す。`,
+- 面談の日程に触れるときは、カレンダーで調べた空きの候補を 2〜3 案示す。`,
   keiri: `- 事務的に簡潔に。受領確認や不足書類の依頼が中心。
 - 【要確認】：金額、支払日、振込先の変更、契約に関わること。`,
   general: `- 効率よく短く。仕入先・物流・経理（freee）・事務連絡など。

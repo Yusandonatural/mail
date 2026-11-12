@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CATEGORIES, DATE_KINDS, LANGUAGES, URGENCIES, type Category, type DateKind, type Language, type Urgency } from "../domain";
+import { parseDateish } from "../time";
 
 /**
  * 二次分類で Claude に返させる JSON（仕様書 4章の表）。
@@ -59,20 +60,42 @@ function pick<T extends string>(values: readonly T[], value: string, fallback: T
   return hit ? { value: hit, known: true } : { value: fallback, known: false };
 }
 
+/** 言語の書き方の揺れ（ja-JP、Japanese、日本語、zh-TW など）を既知の言語コードに寄せる */
+const LANGUAGE_ALIASES: Record<string, Language> = {
+  japanese: "ja", 日本語: "ja", jp: "ja",
+  english: "en",
+  french: "fr", français: "fr", francais: "fr",
+  chinese: "zh", 中文: "zh", 中国語: "zh", 简体中文: "zh", 繁體中文: "zh",
+};
+
+export function normalizeLanguage(value: string): Language {
+  const v = value.trim().toLowerCase();
+  const base = v.split(/[-_\s(]/)[0];
+  return pick(LANGUAGES, base, "en").known ? (base as Language) : (LANGUAGE_ALIASES[v] ?? LANGUAGE_ALIASES[base] ?? "en");
+}
+
 /** Claude の返答を既知の値に寄せる。カテゴリが一覧外なら「一般」にして自信を下げ、要確認に回す */
 export function normalizeClassification(raw: RawClassification): ContentClassification {
   const category = pick(CATEGORIES, raw.category, "general");
-  const conf = Number.isFinite(raw.confidence) ? Math.min(1, Math.max(0, raw.confidence)) : 0.5;
+  // 0〜100 の百分率で返してくることがある
+  const rawConf = raw.confidence > 1 && raw.confidence <= 100 ? raw.confidence / 100 : raw.confidence;
+  const conf = Number.isFinite(rawConf) ? Math.min(1, Math.max(0, rawConf)) : 0.5;
   return {
     category: category.value,
     needs_reply: raw.needs_reply,
     urgency: pick(URGENCIES, raw.urgency, "normal").value,
-    language: pick(LANGUAGES, raw.language, "en").value,
+    language: normalizeLanguage(raw.language),
+    // 日時として読めないもの（「来週」など）は予定の候補にしない
     dates: raw.dates
-      .filter((d) => d.start)
-      .map((d) => ({ ...d, kind: pick(DATE_KINDS, d.kind, "event").value })),
+      .filter((d) => d.start && parseDateish(d.start))
+      .map((d) => ({
+        ...d,
+        kind: pick(DATE_KINDS, d.kind, "event").value,
+        end: d.end && parseDateish(d.end) ? d.end : null,
+      })),
     amount: raw.amount && Number.isFinite(raw.amount.value) ? raw.amount : null,
-    due_date: raw.due_date && /^\d{4}-\d{2}-\d{2}$/.test(raw.due_date) ? raw.due_date : null,
+    // 「2026-11-30T00:00:00+09:00」のように時刻付きで返ってきても日付だけ使う
+    due_date: raw.due_date && /^\d{4}-\d{2}-\d{2}(?:$|T)/.test(raw.due_date) ? raw.due_date.slice(0, 10) : null,
     summary: raw.summary,
     accepts_proposed_time: raw.accepts_proposed_time,
     confidence: category.known ? conf : Math.min(conf, 0.5),

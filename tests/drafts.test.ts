@@ -151,8 +151,9 @@ describe("Claude の出力の読み取り", () => {
       body: "こんにちは",
     });
   });
-  it("タグが無ければ全体を本文とみなす", () => {
-    expect(parseDraftOutput("こんにちは")).toEqual({ notes: "", body: "こんにちは" });
+  it("<draft> が無い・閉じていない応答は本文にしない（途中経過を下書きとして保存しない）", () => {
+    expect(parseDraftOutput("注文を調べます。")).toEqual({ notes: "", body: "" });
+    expect(parseDraftOutput("<notes>途中</notes><draft>山田様\nご注文の件")).toEqual({ notes: "途中", body: "" });
   });
 });
 

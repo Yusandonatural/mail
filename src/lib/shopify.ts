@@ -90,7 +90,10 @@ export function formatProducts(nodes: ProductNode[]): string | null {
     .map((p) => {
       const stock = (v: VariantNode) => {
         if (!v.availableForSale) return "販売停止・売り切れ";
-        if (typeof v.inventoryQuantity === "number" && p.tracksInventory !== false) return `在庫 ${v.inventoryQuantity}`;
+        if (typeof v.inventoryQuantity === "number" && p.tracksInventory !== false) {
+          // 在庫切れでも販売を続ける設定（予約・取り寄せ）では 0 以下になる
+          return v.inventoryQuantity > 0 ? `在庫 ${v.inventoryQuantity}` : "販売中（在庫数 0・取り寄せや予約の扱い）";
+        }
         return "販売中";
       };
       const variants = p.variants.nodes
@@ -107,18 +110,42 @@ export function formatProducts(nodes: ProductNode[]): string | null {
     .join("\n");
 }
 
+const ENTITIES: Record<string, string> = { nbsp: " ", lt: "<", gt: ">", quot: '"', apos: "'", yen: "¥", amp: "&" };
+
 /** 規約の本文（HTML）を読める長さのテキストにする */
 export function htmlToPlain(html: string, max = 1500): string {
   const text = html
-    .replace(/<(br|\/p|\/li|\/h\d)\s*\/?>/gi, "\n")
+    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, "")
+    .replace(/<li\b[^>]*>/gi, "\n・")
+    .replace(/<(br|\/p|\/div|\/tr|\/h\d)\b[^>]*>/gi, "\n")
     .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
+    // &amp; を最後に戻す（&amp;lt; を「<」にしてしまわないよう、一度に置き換える）
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, code: string) => {
+      if (code[0] === "#") {
+        const n = code[1].toLowerCase() === "x" ? parseInt(code.slice(2), 16) : Number(code.slice(1));
+        return Number.isFinite(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : m;
+      }
+      return ENTITIES[code.toLowerCase()] ?? m;
+    })
+    .replace(/[ \t\u00a0]+/g, " ")
+    .replace(/ *\n */g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   return text.length > max ? `${text.slice(0, max)}…（以下省略）` : text;
+}
+
+/**
+ * 注文検索の条件（Shopify の検索構文）。全角の「＃１００１」も直し、値は引用符で囲んで
+ * 空白や記号で検索構文が崩れないようにする。注文番号は数字だけなら「#」を付ける。
+ */
+export function orderSearchQuery(q: { email?: string; orderNumber?: string }): string | null {
+  const quote = (v: string) => `"${v.replace(/["\\]/g, "")}"`;
+  const terms: string[] = [];
+  const num = q.orderNumber?.normalize("NFKC").replace(/\s+/g, "").replace(/^(注文番号|order)[:：]?/i, "");
+  if (num) terms.push(`name:${quote(/^\d+$/.test(num) ? `#${num}` : num)}`);
+  const email = q.email?.normalize("NFKC").trim().toLowerCase();
+  if (email) terms.push(`email:${quote(email)}`);
+  return terms.length ? terms.join(" OR ") : null;
 }
 
 class ShopifyError extends Error {}
@@ -137,6 +164,8 @@ export class ShopifyStore implements ShopInfo {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": this.token },
       body: JSON.stringify({ query, variables }),
+      // 応答が無いまま下書き全体が止まらないように
+      signal: AbortSignal.timeout(20_000),
     });
     if (!res.ok) throw new ShopifyError(`Shopify API ${res.status}`);
     const json = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
@@ -159,11 +188,9 @@ export class ShopifyStore implements ShopInfo {
   }
 
   async findOrders(q: { email?: string; orderNumber?: string }): Promise<string> {
-    const terms: string[] = [];
-    if (q.orderNumber) terms.push(`name:${q.orderNumber.startsWith("#") ? q.orderNumber : `#${q.orderNumber}`}`);
-    if (q.email) terms.push(`email:${q.email}`);
-    if (!terms.length) return "メールアドレスか注文番号を指定してください。";
-    const data = await this.gql<{ orders: { nodes: OrderNode[] } }>(ORDERS, { q: terms.join(" OR ") });
+    const query = orderSearchQuery(q);
+    if (!query) return "メールアドレスか注文番号を指定してください。";
+    const data = await this.gql<{ orders: { nodes: OrderNode[] } }>(ORDERS, { q: query });
     return formatOrders(data.orders.nodes) ?? "該当する注文は見つかりませんでした。";
   }
 

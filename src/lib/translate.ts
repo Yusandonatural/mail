@@ -2,6 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { LANGUAGE_LABELS, type Language } from "./domain";
 import { anthropic, asData, ClaudeRefusalError, MODELS } from "./claude/client";
 import { sha256 } from "./crypto";
+import { findPlaceholders } from "./placeholders";
 
 /**
  * 翻訳。受信した外国語のメールを日本語に（読むため）、日本語で書いた返信を相手の言語に（送るため）。
@@ -45,6 +46,11 @@ function tag(text: string, name: string): string | null {
   return text.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))?.[1]?.trim() ?? null;
 }
 
+/** タグが閉じていない（途中で切れた）ときは、タグだけ外して使う */
+function untagged(text: string): string {
+  return text.replace(/<\/?(subject|body)>/g, "").trim();
+}
+
 async function ask(system: string, user: string): Promise<string> {
   const message = await anthropic().beta.messages.create({
     model: MODELS.translate,
@@ -56,6 +62,8 @@ async function ask(system: string, user: string): Promise<string> {
     messages: [{ role: "user", content: user }],
   });
   if (message.stop_reason === "refusal") throw new ClaudeRefusalError(message.stop_details?.category ?? "翻訳");
+  // 途中で切れた訳文を、全文のように見せて使わない
+  if (message.stop_reason === "max_tokens") throw new Error("訳文が長すぎて途中で切れました");
   return message.content
     .filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text")
     .map((b) => b.text)
@@ -65,12 +73,12 @@ async function ask(system: string, user: string): Promise<string> {
 export class ClaudeTranslator implements Translator {
   async toJapanese(input: { subject: string; body: string }) {
     const out = await ask(INCOMING_RULES, [`件名: ${input.subject}`, asData("email_body", input.body)].join("\n\n"));
-    return { subject: tag(out, "subject") ?? "", body: tag(out, "body") ?? out.trim() };
+    return { subject: tag(out, "subject") ?? "", body: tag(out, "body") ?? untagged(out) };
   }
 
   async fromJapanese(input: { body: string; target: Language }) {
     const out = await ask(outgoingRules(input.target), asData("reply_ja", input.body));
-    return tag(out, "body") ?? out.trim();
+    return tag(out, "body") ?? untagged(out);
   }
 }
 
@@ -101,6 +109,10 @@ export async function translateReply(
   const hadSignature = Boolean(ja.trim()) && body.includes(ja.trim());
   if (hadSignature) body = body.replace(ja.trim(), "").trim();
   const translated = await translator.fromJapanese({ body, target: input.target });
+  // 【要確認】が訳で消えると、埋めないまま送れてしまう（送信ボタンの止めが効かない）
+  if (findPlaceholders(translated).length < findPlaceholders(body).length) {
+    throw new Error("訳文から【要確認】の空欄が抜けたため、訳文を使いませんでした。もう一度翻訳してください");
+  }
   const signature = input.target === "ja" ? ja : en;
   return hadSignature ? `${translated.trim()}\n\n${signature}` : translated.trim();
 }

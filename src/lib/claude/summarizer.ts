@@ -39,6 +39,8 @@ export async function collectSummaryBatch(batchId: string): Promise<BatchState> 
   const results = new Map<string, string>();
   for await (const r of await anthropic().messages.batches.results(batchId)) {
     if (r.result.type !== "succeeded") continue;
+    // 応答を控えた・途中で切れた要約は、相手のメモとして残さない
+    if (r.result.message.stop_reason === "refusal" || r.result.message.stop_reason === "max_tokens") continue;
     const text = r.result.message.content
       .map((b) => (b.type === "text" ? b.text : ""))
       .join("")

@@ -3,7 +3,7 @@ import type { Db } from "./db";
 import { contacts, drafts, messages, playbooks, type DraftRow, type User } from "./db/schema";
 import type { DraftWriter, ThreadMessageForDraft } from "./claude/drafter";
 import { isCategory, LANGUAGES, type Language } from "./domain";
-import type { CalendarApi } from "./google/calendar-api";
+import type { CalendarApi, CalendarEvent, Interval } from "./google/calendar-api";
 import type { MailApi } from "./google/mail-api";
 import { LabelResolver } from "./labels";
 import { buildMime, replySubject } from "./mail/mime";
@@ -12,6 +12,7 @@ import { bodyHash } from "./crypto";
 import { getSetting } from "./settings";
 import { freeWindows, proposeSlots } from "./slots";
 import { addDays, formatJst, fromJst, jstParts, startOfJstDay } from "./time";
+import { isMostlyJapanese } from "./translate";
 import type { ShopInfo } from "./shopify";
 import type { DraftTools } from "./claude/drafter";
 import { PermanentJobError } from "./jobs";
@@ -36,7 +37,10 @@ export type GenerateResult =
   | { kind: "updated"; draft: DraftRow }
   | { kind: "skipped"; reason: string };
 
-/** 自動で空き時間を添えるカテゴリ（日程調整が多いもの） */
+/** 2026年11月12日(木) 9:00（年をまたぐ日付を Claude が取り違えないよう年を付ける） */
+export function formatJstWithYear(d: Date): string {
+  return `${jstParts(d).year}年${formatJst(d)}`;
+}
 
 export function draftText(message: ParsedMessage): string {
   return message.text.replace(/\r\n/g, "\n").trim();
@@ -124,9 +128,16 @@ export async function generateDraft(
   const thread = await mail.getThread(threadId);
   const parsed = (thread.messages ?? []).map(parseMessage).filter((m) => !m.labelIds.includes("DRAFT"));
   if (!parsed.length) throw new PermanentJobError("スレッドが見つかりません");
-  const isOurs = (m: ParsedMessage) => m.labelIds.includes("SENT") || m.from?.email === user.email;
-  const target =
-    parsed.find((m) => m.id === replyToMessageId) ?? [...parsed].reverse().find((m) => !isOurs(m)) ?? null;
+  const businessAddresses = new Set(
+    (await db.query.addressMap.findMany()).map((a) => a.address.toLowerCase()),
+  );
+  // 自分が送ったもの、または会社の用途別アドレスから（別の担当者が）送ったもの
+  const isOurs = (m: ParsedMessage) =>
+    m.labelIds.includes("SENT") ||
+    (Boolean(m.from) && (m.from!.email === user.email.toLowerCase() || businessAddresses.has(m.from!.email)));
+  // 指定されたメールが自分たちの送ったものなら、自分宛ての返信にならないよう最後の相手からのメールにする
+  const requested = parsed.find((m) => m.id === replyToMessageId);
+  const target = (requested && !isOurs(requested) ? requested : null) ?? [...parsed].reverse().find((m) => !isOurs(m)) ?? null;
   if (!target || !target.from) return { kind: "skipped", reason: "返信する相手のメールがありません" };
 
   // Claude のスキルなどで Gmail に下書きが既にあれば、自動では作らずそれを取り込む
@@ -159,11 +170,16 @@ export async function generateDraft(
       .limit(1)
   )[0];
   const category = row?.category && isCategory(row.category) ? row.category : null;
+  // 分類が無い（アプリが取り込んでいないメール）ときは本文から日本語かどうかを見る
   const language: Language = (LANGUAGES as readonly string[]).includes(row?.language ?? "")
     ? (row?.language as Language)
-    : "ja";
+    : isMostlyJapanese(stripQuoted(target.text) || target.text)
+      ? "ja"
+      : "en";
 
-  const contact = (await db.select().from(contacts).where(eq(contacts.email, target.from.email)).limit(1))[0];
+  // 問合せフォームの通知（From: mailer@shopify.com、Reply-To: お客様）などは Reply-To が相手
+  const replyTo = target.replyTo ?? target.from;
+  const contact = (await db.select().from(contacts).where(eq(contacts.email, replyTo.email)).limit(1))[0];
   const priorFromSender = parsed.filter((m) => m.from?.email === target.from?.email).length > 1;
   const knownContact = Boolean(contact?.notes || contact?.lastSummary || priorFromSender || parsed.some(isOurs));
 
@@ -173,19 +189,19 @@ export async function generateDraft(
     getSetting(db, "signatures"),
   ]);
 
-  const businessAddresses = new Set(
-    (await db.query.addressMap.findMany()).map((a) => a.address.toLowerCase()),
-  );
   const sendAs = await mail.sendAsAddresses().catch(() => [] as Address[]);
   const from = chooseFrom(target, sendAs, businessAddresses);
   const sigSet = (from && signatures.byAddress[from.email]) || {};
   const signature = language === "ja" ? (sigSet.ja ?? signatures.ja) : (sigSet.en ?? signatures.en);
 
-  const threadForDraft: ThreadMessageForDraft[] = parsed.slice(-10).map((m) => ({
+  // 直近10通。返信先がそれより前なら先頭に足す
+  const recent = parsed.slice(-10);
+  const threadForDraft: ThreadMessageForDraft[] = (recent.includes(target) ? recent : [target, ...parsed.slice(-9)]).map((m) => ({
     from: m.from ? (m.from.name ? `${m.from.name} <${m.from.email}>` : m.from.email) : "不明",
-    date: formatJst(m.date),
+    date: formatJstWithYear(m.date),
     text: (stripQuoted(m.text) || m.text).slice(0, 8000),
     fromUs: isOurs(m),
+    isTarget: m === target,
   }));
 
   const result = await drafter.write({
@@ -194,14 +210,14 @@ export async function generateDraft(
     category,
     language,
     summary: row?.summary ?? target.subject,
-    senderName: target.from.name,
+    senderName: replyTo.name ?? target.from.name,
     knownContact,
     contactNotes: contact?.notes ?? "",
     contactSummary: contact?.lastSummary ?? "",
     signature,
-    senderEmail: target.from.email,
+    senderEmail: replyTo.email,
     thread: threadForDraft,
-    now: formatJst(new Date()),
+    now: formatJstWithYear(new Date()),
     tools: {
       shop: deps.shop,
       calendar: deps.calendar ? calendarTools(db, deps.calendar) : null,
@@ -212,7 +228,6 @@ export async function generateDraft(
   });
 
   const notes = result.lookups?.length ? `${result.notes}\n確認した情報: ${result.lookups.join("、")}` : result.notes;
-  const replyTo = target.replyTo ?? target.from;
   const raw = buildMime({
     from,
     to: [replyTo],
@@ -283,12 +298,34 @@ const hm = (d: Date) => {
   return `${p.hour}:${String(p.minute).padStart(2, "0")}`;
 };
 
+/** 予定の期間。終日の予定は日本時間の日付で、終わりの日は含まない（Google カレンダーの形式） */
+function eventInterval(e: CalendarEvent): Interval {
+  if (e.allDay) {
+    const start = parseJstDate(e.start) ?? new Date(e.start);
+    return { start, end: parseJstDate(e.end) ?? addDays(start, 1) };
+  }
+  return { start: new Date(e.start), end: new Date(e.end || e.start) };
+}
+
+/** その日（日本時間の0時〜24時）にかかる予定か。前日から続く予定や、数日にわたる終日の予定も含める */
+function onDay(e: CalendarEvent, day: Date): boolean {
+  const { start, end } = eventInterval(e);
+  const next = addDays(day, 1);
+  return start < next && Math.max(end.getTime(), start.getTime() + 1) > day.getTime();
+}
+
 /** 下書きを書く Claude に渡すカレンダーの調べもの（営業時間と、設定でつないだカレンダーを見る） */
 export function calendarTools(db: Db, calendar: CalendarApi, now = new Date()): NonNullable<DraftTools["calendar"]> {
   const load = async () => {
     const [hours, calendarMap] = await Promise.all([getSetting(db, "businessHours"), getSetting(db, "calendarMap")]);
     return { hours, ids: [...new Set(Object.values(calendarMap))] };
   };
+  const loadEvents = (ids: string[], from: Date, end: Date) =>
+    Promise.all(ids.map((id) => calendar.listEvents(id, from, end).catch(() => []))).then((l) => {
+      // 同じ予定が複数のカレンダーに出ることがある（共有カレンダーなど）
+      const seen = new Set<string>();
+      return l.flat().filter((e) => !seen.has(`${e.id}|${e.start}`) && Boolean(seen.add(`${e.id}|${e.start}`)));
+    });
   return {
     async check(fromDate, toDate) {
       const from = parseJstDate(fromDate);
@@ -297,25 +334,22 @@ export function calendarTools(db: Db, calendar: CalendarApi, now = new Date()): 
       const days = Math.min(MAX_CHECK_DAYS, Math.max(1, Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1));
       const end = addDays(from, days);
       const { hours, ids } = await load();
-      const [busy, events] = await Promise.all([
-        calendar.freeBusy(ids, from, end),
-        Promise.all(ids.map((id) => calendar.listEvents(id, from, end).catch(() => []))).then((l) => {
-          // 同じ予定が複数のカレンダーに出ることがある（共有カレンダーなど）
-          const seen = new Set<string>();
-          return l.flat().filter((e) => !seen.has(`${e.id}|${e.start}`) && Boolean(seen.add(`${e.id}|${e.start}`)));
-        }),
-      ]);
+      const [busy, events] = await Promise.all([calendar.freeBusy(ids, from, end), loadEvents(ids, from, end)]);
       const lines = [`営業時間: ${hours.start}〜${hours.end}（営業日以外は「休み」）`];
       for (let i = 0; i < days; i++) {
         const day = addDays(from, i);
         const next = addDays(day, 1);
         const dayEvents = events
-          .filter((e) => {
-            const s = e.allDay ? parseJstDate(e.start) ?? new Date(e.start) : new Date(e.start);
-            return s >= day && s < next;
-          })
-          .sort((a, b) => a.start.localeCompare(b.start))
-          .map((e) => (e.allDay ? `終日 ${e.summary}` : `${hm(new Date(e.start))}〜${hm(new Date(e.end))} ${e.summary}`));
+          .filter((e) => onDay(e, day))
+          .sort((a, b) => eventInterval(a).start.getTime() - eventInterval(b).start.getTime())
+          .map((e) => {
+            if (e.allDay) return `終日 ${e.summary}`;
+            const { start, end } = eventInterval(e);
+            // 日をまたぐ予定は日付も書く
+            return start >= day && end <= next
+              ? `${hm(start)}〜${hm(end)} ${e.summary}`
+              : `${formatJst(start)}〜${formatJst(end)} ${e.summary}`;
+          });
         const open = freeWindows(busy, hours, day);
         const isOpenDay = hours.days.includes(jstParts(day).weekday);
         lines.push(
@@ -333,11 +367,20 @@ export function calendarTools(db: Db, calendar: CalendarApi, now = new Date()): 
       const from = start && start > now ? start : now;
       const leadHours = Math.max(0, (now.getTime() + 24 * 3600_000 - from.getTime()) / 3600_000);
       const days = opts.days ?? 21;
-      const busy = await calendar.freeBusy(ids, startOfJstDay(from), addDays(from, days + 1));
+      const [busy, events] = await Promise.all([
+        calendar.freeBusy(ids, startOfJstDay(from), addDays(from, days + 1)),
+        loadEvents(ids, startOfJstDay(from), addDays(from, days + 1)),
+      ]);
       const duration = opts.durationMinutes ?? hours.slotMinutes;
       const slots = proposeSlots({ busy, hours, from, days, durationMinutes: duration, count: opts.count ?? 3, leadHours });
       if (!slots.length) return `${days}日以内に${duration}分の空きは見つかりませんでした。`;
-      return slots.map((s) => `- ${formatJst(s.start)}〜${hm(s.end)}`).join("\n");
+      // 終日の予定（出張・休みなど）は「空き時間」として扱われることが多いので、候補の日に添えて判断させる
+      return slots
+        .map((s) => {
+          const allDay = events.filter((e) => e.allDay && onDay(e, startOfJstDay(s.start))).map((e) => e.summary);
+          return `- ${formatJst(s.start)}〜${hm(s.end)}${allDay.length ? `（この日は終日の予定あり: ${allDay.join("、")}）` : ""}`;
+        })
+        .join("\n");
     },
   };
 }
