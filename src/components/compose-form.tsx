@@ -32,6 +32,7 @@ export function ComposeForm({
   const [v, setV] = useState(defaults);
   const [includeAttachments, setInclude] = useState(true);
   const [saved, setSaved] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const placeholders = useMemo(() => findPlaceholders(v.text), [v.text]);
   const set = (k: keyof ComposeDefaults) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
     setV({ ...v, [k]: e.target.value });
@@ -39,8 +40,8 @@ export function ComposeForm({
   return (
     <div className="panel stack">
       <div>
-        <label>送信元</label>
-        <select value={v.from} onChange={set("from")}>
+        <label htmlFor="compose-from">送信元</label>
+        <select id="compose-from" value={v.from} onChange={set("from")}>
           {fromOptions.map((o) => (
             <option key={o.email} value={o.email}>
               {o.name ? `${o.name} <${o.email}>` : o.email}
@@ -49,20 +50,20 @@ export function ComposeForm({
         </select>
       </div>
       <div>
-        <label>宛先（カンマ区切り）</label>
-        <input value={v.to} onChange={set("to")} />
+        <label htmlFor="compose-to">宛先（複数はカンマで区切る）</label>
+        <input id="compose-to" type="text" inputMode="email" autoComplete="off" value={v.to} onChange={set("to")} />
       </div>
       <div>
-        <label>Cc</label>
-        <input value={v.cc} onChange={set("cc")} />
+        <label htmlFor="compose-cc">Cc</label>
+        <input id="compose-cc" type="text" inputMode="email" autoComplete="off" value={v.cc} onChange={set("cc")} />
       </div>
       <div>
-        <label>件名</label>
-        <input value={v.subject} onChange={set("subject")} />
+        <label htmlFor="compose-subject">件名</label>
+        <input id="compose-subject" value={v.subject} onChange={set("subject")} />
       </div>
       <div>
-        <label>本文</label>
-        <textarea rows={16} value={v.text} onChange={set("text")} />
+        <label htmlFor="compose-text">本文</label>
+        <textarea id="compose-text" className="draft-text" rows={16} value={v.text} onChange={set("text")} />
       </div>
       {v.attachmentNames.length ? (
         <label className="inline">
@@ -70,8 +71,12 @@ export function ComposeForm({
           元の添付ファイルを付ける（{v.attachmentNames.join("、")}）
         </label>
       ) : null}
-      {placeholders.length ? <div className="placeholder-list">【要確認】が残っています</div> : null}
-      <div className="actions">
+      {placeholders.length ? (
+        <div className="placeholder-list">【要確認】が{placeholders.length}か所残っています。埋めると送信できます</div>
+      ) : !v.to.trim() ? (
+        <div className="meta">宛先を入れると送信できます</div>
+      ) : null}
+      <div className="send-row">
         <SendButton
           clientId={clientId}
           email={userEmail}
@@ -97,25 +102,36 @@ export function ComposeForm({
         />
         <button
           type="button"
+          disabled={saving}
           onClick={async () => {
-            const r = await createComposeDraft({
-              from: v.from,
-              to: v.to,
-              cc: v.cc,
-              subject: v.subject,
-              text: v.text,
-              forwardRowId: v.forwardRowId,
-              includeAttachments,
-              saveOnly: true,
-              existingDraftId: draftId,
-            });
-            if (r.ok && r.data) setDraftId(r.data.gmailDraftId);
-            setSaved(r.ok ? "Gmail の下書きに保存しました" : r.error);
+            setSaving(true);
+            setSaved(null);
+            try {
+              const r = await createComposeDraft({
+                from: v.from,
+                to: v.to,
+                cc: v.cc,
+                subject: v.subject,
+                text: v.text,
+                forwardRowId: v.forwardRowId,
+                includeAttachments,
+                saveOnly: true,
+                existingDraftId: draftId,
+              });
+              if (r.ok && r.data) setDraftId(r.data.gmailDraftId);
+              setSaved(r.ok ? "Gmail の下書きに保存しました" : r.error);
+            } catch {
+              setSaved("保存できませんでした。もう一度試してください");
+            } finally {
+              setSaving(false);
+            }
           }}
         >
-          下書きに保存
+          {saving ? "保存中…" : "下書きに保存"}
         </button>
-        {saved ? <span className="meta">{saved}</span> : null}
+        <span className="meta" role="status">
+          {saved}
+        </span>
       </div>
     </div>
   );

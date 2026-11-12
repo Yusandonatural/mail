@@ -7,7 +7,11 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
       </span>
       <h1>悠三堂メール</h1>
       <p className="meta">yusando.com の Google アカウントでログインします。</p>
-      {error ? <div className="banner error">{error}</div> : null}
+      {error ? (
+        <div className="banner error" role="alert">
+          <span>{error}</span>
+        </div>
+      ) : null}
       <p>
         <a className="button primary" href="/api/auth/login">
           Google でログイン

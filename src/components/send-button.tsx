@@ -184,7 +184,7 @@ export function SendButton({
           ✓ 送信しました
         </span>
       ) : (
-        <button type="button" className="primary" disabled={disabled || busy} onClick={onClick}>
+        <button type="button" className={confirming ? "primary send confirming" : "primary send"} disabled={disabled || busy} onClick={onClick}>
           {busy ? "送信中…" : confirming ? "もう一度押すと送信します" : label}
         </button>
       )}
@@ -193,7 +193,11 @@ export function SendButton({
           やめる
         </button>
       ) : null}
-      {error ? <span className="placeholder-list">{error}</span> : null}
+      {error ? (
+        <span className="placeholder-list send-error" role="alert">
+          {error}
+        </span>
+      ) : null}
     </span>
   );
 }

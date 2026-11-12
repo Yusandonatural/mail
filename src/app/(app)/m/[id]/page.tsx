@@ -27,7 +27,7 @@ import type { MailApi } from "@/lib/google/mail-api";
 import { HtmlFrame } from "@/components/html-frame";
 import { DraftCreate, DraftEditor, type DraftView } from "@/components/draft-editor";
 import { SubmitButton } from "@/components/submit-button";
-import { formatAmount } from "@/components/message-row";
+import { Avatar, formatAmount } from "@/components/message-row";
 import { FreeePanel } from "@/components/freee-panel";
 import { MarkRead } from "@/components/mark-read";
 import { Translation } from "@/components/translation";
@@ -160,7 +160,7 @@ export default async function MessagePage({
         <Link href={back} data-back>
           ← 一覧に戻る
         </Link>
-        <div className="actions">
+        <div className="actions detail-actions">
           <Link className="button" href={`/compose?forward=${row.id}`}>
             転送
           </Link>
@@ -168,27 +168,30 @@ export default async function MessagePage({
             <input type="hidden" name="rowId" value={row.id} />
             <input type="hidden" name="kind" value="archive" />
             <input type="hidden" name="back" value={back} />
-            <SubmitButton data-archive>アーカイブ（e）</SubmitButton>
+            <SubmitButton data-archive>
+              アーカイブ <span className="key" aria-hidden="true">e</span>
+            </SubmitButton>
           </form>
-          <form action={archiveAction}>
+          <form action={archiveAction} id={`spam-${row.id}`}>
             <input type="hidden" name="rowId" value={row.id} />
             <input type="hidden" name="kind" value="spam" />
             <input type="hidden" name="back" value={back} />
             <SubmitButton className="danger" data-spam>
-              迷惑メール（!）
+              迷惑メール <span className="key" aria-hidden="true">!</span>
             </SubmitButton>
-            <label className="meta block-opt" title={`${row.fromEmail} から今後届くメールも、自動で迷惑メールへ移します`}>
-              <input type="checkbox" name="block" value="1" /> 今後もこの送信者は迷惑メールへ
-            </label>
           </form>
           <form action={archiveAction}>
             <input type="hidden" name="rowId" value={row.id} />
             <input type="hidden" name="kind" value="trash" />
             <input type="hidden" name="back" value={back} />
             <SubmitButton className="danger" data-trash>
-              削除（#）
+              削除 <span className="key" aria-hidden="true">#</span>
             </SubmitButton>
           </form>
+          {/* 迷惑メールのボタンと一緒に送る（form 属性で上の form に属させる） */}
+          <label className="meta block-opt" title={`${row.fromEmail} から今後届くメールも、自動で迷惑メールへ移します`}>
+            <input type="checkbox" name="block" value="1" form={`spam-${row.id}`} /> 迷惑メールにするとき、今後もこの送信者を迷惑メールへ
+          </label>
         </div>
       </div>
 
@@ -209,12 +212,14 @@ export default async function MessagePage({
       ) : null}
       {row.suggestConfirm ? (
         <div className="banner confirm">
-          相手が日程を承諾したようです。右の「日程」で仮予定を確定にできます。
+          相手が日程を承諾したようです。「日程」の欄で仮予定を確定にできます。
         </div>
       ) : null}
       {loadError ? (
-        <div className="banner error">
-          Gmail から読み込めませんでした：{loadError}。続く場合は一度ログアウトして、ログインし直してください。
+        <div className="banner error" role="alert">
+          <span>
+            Gmail から読み込めませんでした：{loadError}。続く場合は一度ログアウトして、ログインし直してください。
+          </span>
         </div>
       ) : null}
 
@@ -222,6 +227,16 @@ export default async function MessagePage({
         <div className="col-main">
           <div className="panel p-summary">
             <h1>{row.subject || "(件名なし)"}</h1>
+            <div className="sender">
+              <Avatar name={row.fromName || row.fromEmail} email={row.fromEmail} />
+              <span className="sender-text">
+                <strong>{row.fromName || row.fromEmail}</strong>
+                <span className="meta">
+                  {row.fromName ? `${row.fromEmail}・` : ""}
+                  {formatJst(row.receivedAt)}
+                </span>
+              </span>
+            </div>
             <div className="badges" style={{ marginBottom: 10 }}>
               {isFolder(row.folder) ? <span className="badge draft">{folderName(row.folder)}</span> : null}
               {row.secondaryFolders.filter(isFolder).map((f) => (
@@ -240,12 +255,15 @@ export default async function MessagePage({
             </div>
             <div className="notes">{row.summary}</div>
             <details style={{ marginTop: 10 }}>
-              <summary>このフォルダでよい？（振り分けを直す）</summary>
+              <summary>振り分けを直す</summary>
               <form action={moveFolder} className="stack">
                 <input type="hidden" name="rowId" value={row.id} />
                 <div className="inline-form">
                   <div>
-                    <select name="folder" defaultValue={row.folder}>
+                    <label htmlFor={`folder-${row.id}`} className="visually-hidden">
+                      移動先のフォルダ
+                    </label>
+                    <select id={`folder-${row.id}`} name="folder" defaultValue={row.folder}>
                       {visibleFolders(user).map((f) => (
                         <option key={f} value={f}>
                           {folderName(f)}
@@ -271,6 +289,7 @@ export default async function MessagePage({
           </div>
 
           <div className="panel p-thread">
+            {loadError ? <p className="empty">本文を読み込めませんでした。下の「Gmail で開く」から読めます。</p> : null}
             {thread.length > 1 ? <p className="meta thread-note">新しいメールが上です（全{thread.length}通）。古いメールは押すと開きます</p> : null}
             {[...thread].reverse().map((m, i) => {
               const ours = m.labelIds.includes("SENT") || m.from?.email === user.email;
@@ -326,7 +345,12 @@ export default async function MessagePage({
 
         <div className="col-side">
           <div className="p-reply">
-            {loadError ? null : draftViews.length ? (
+            {loadError ? (
+              <div className="panel stack">
+                <h2>返信</h2>
+                <p className="meta">Gmail から読み込めないため、返信の下書きを出せません。読み込めるようになってから開き直してください。</p>
+              </div>
+            ) : draftViews.length ? (
               draftViews.map((d, i) => (
                 <DraftEditor
                   key={`${d.id}-${d.version}-${d.gmailMessageId}`}
@@ -374,21 +398,23 @@ export default async function MessagePage({
                           <input type="hidden" name="candidateId" value={c.id} />
                           <input type="hidden" name="back" value={self} />
                           <div>
-                            <label>タイトル</label>
-                            <input name="title" defaultValue={e.title} />
+                            <label htmlFor={`title-${c.id}`}>タイトル</label>
+                            <input id={`title-${c.id}`} name="title" defaultValue={e.title} />
                           </div>
                           <div className="stack">
                             <div>
-                              <label>開始</label>
+                              <label htmlFor={`start-${c.id}`}>開始</label>
                               <input
+                                id={`start-${c.id}`}
                                 name="start"
                                 type={c.allDay ? "date" : "datetime-local"}
                                 defaultValue={toLocalInput(c.start, c.allDay)}
                               />
                             </div>
                             <div>
-                              <label>終了（空なら1時間）</label>
+                              <label htmlFor={`end-${c.id}`}>終了（空なら1時間）</label>
                               <input
+                                id={`end-${c.id}`}
                                 name="end"
                                 type={c.allDay ? "date" : "datetime-local"}
                                 defaultValue={toLocalInput(c.end, c.allDay)}
@@ -396,8 +422,8 @@ export default async function MessagePage({
                             </div>
                           </div>
                           <div>
-                            <label>カレンダー</label>
-                            <select name="calendarId" defaultValue={e.calendarId}>
+                            <label htmlFor={`cal-${c.id}`}>カレンダー</label>
+                            <select id={`cal-${c.id}`} name="calendarId" defaultValue={e.calendarId}>
                               <option value="primary">メイン</option>
                               {calendars
                                 .filter((cal) => !cal.primary)
@@ -420,10 +446,10 @@ export default async function MessagePage({
                             <SubmitButton className="primary">予定を作る</SubmitButton>
                           </div>
                         </form>
-                        <form action={ignoreCandidateAction} style={{ marginTop: 6 }}>
+                        <form action={ignoreCandidateAction} className="cand-foot">
                           <input type="hidden" name="candidateId" value={c.id} />
                           <input type="hidden" name="back" value={self} />
-                          <SubmitButton>この候補は使わない</SubmitButton>
+                          <SubmitButton className="link-button">この候補は使わない</SubmitButton>
                         </form>
                       </>
                     ) : (
@@ -476,17 +502,17 @@ export default async function MessagePage({
               <input type="hidden" name="back" value={self} />
               <div className="grid2">
                 <div>
-                  <label>組織</label>
-                  <input name="organization" defaultValue={contact?.organization ?? ""} />
+                  <label htmlFor="contact-org">組織</label>
+                  <input id="contact-org" name="organization" defaultValue={contact?.organization ?? ""} />
                 </div>
                 <div>
-                  <label>関係</label>
-                  <input name="relationship" defaultValue={contact?.relationship ?? ""} placeholder="例：抹茶の卸先" />
+                  <label htmlFor="contact-rel">関係</label>
+                  <input id="contact-rel" name="relationship" defaultValue={contact?.relationship ?? ""} placeholder="例：抹茶の卸先" />
                 </div>
               </div>
               <div>
-                <label>メモ（下書きの参考になります）</label>
-                <textarea name="notes" rows={3} defaultValue={contact?.notes ?? ""} />
+                <label htmlFor="contact-notes">メモ（下書きの参考になります）</label>
+                <textarea id="contact-notes" name="notes" rows={3} defaultValue={contact?.notes ?? ""} />
               </div>
               <SubmitButton>メモを保存</SubmitButton>
             </form>

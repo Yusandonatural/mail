@@ -59,7 +59,11 @@ export default async function TodayPage() {
       <div className="topbar">
         <h1>今日・今週の予定</h1>
       </div>
-      {error ? <div className="banner error">カレンダーを読み込めませんでした：{error}</div> : null}
+      {error ? (
+        <div className="banner error" role="alert">
+          <span>カレンダーを読み込めませんでした：{error}</span>
+        </div>
+      ) : null}
       {dues.length ? (
         <div className="panel">
           <h2>14日以内の支払期日</h2>

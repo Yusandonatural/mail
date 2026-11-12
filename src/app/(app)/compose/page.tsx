@@ -67,7 +67,11 @@ export default async function ComposePage({ searchParams }: { searchParams: Prom
       <div className="topbar">
         <h1>{defaults.forwardRowId ? "転送" : "新規作成"}</h1>
       </div>
-      {error ? <div className="banner error">{error}。一度ログアウトして、ログインし直してください。</div> : null}
+      {error ? (
+        <div className="banner error" role="alert">
+          <span>{error}。一度ログアウトして、ログインし直してください。</span>
+        </div>
+      ) : null}
       <ComposeForm defaults={defaults} fromOptions={sendAs} clientId={process.env.GOOGLE_CLIENT_ID ?? ""} userEmail={user.email} />
     </>
   );

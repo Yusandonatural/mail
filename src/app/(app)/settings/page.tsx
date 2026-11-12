@@ -42,9 +42,9 @@ import { pushConfigured } from "@/lib/notify";
 
 const WEEK = ["日", "月", "火", "水", "木", "金", "土"];
 
-function FolderSelect({ name, value, withBlock }: { name: string; value?: string; withBlock?: boolean }) {
+function FolderSelect({ name, value, withBlock, id, label }: { name: string; value?: string; withBlock?: boolean; id?: string; label?: string }) {
   return (
-    <select name={name} defaultValue={value}>
+    <select name={name} defaultValue={value} id={id} aria-label={label}>
       {FOLDER_KEYS.map((f) => (
         <option key={f} value={f}>
           {folderName(f)}
@@ -102,7 +102,7 @@ export default async function SettingsPage({
       <div className="panel">
         <h2>利用者</h2>
         <p className="meta">ここに追加した人だけがログインできます。管理者は全フォルダと設定、担当者は選んだフォルダだけを見られます。</p>
-        <table className="simple">
+        <table className="simple rtable">
           <thead>
             <tr>
               <th>メール</th>
@@ -113,16 +113,18 @@ export default async function SettingsPage({
           <tbody>
             {userRows.map((u) => (
               <tr key={u.id}>
-                <td>{u.email}</td>
+                <td>
+                  <strong>{u.email}</strong>
+                </td>
                 <td>
                   <form action={saveUserAction} className="stack">
                     <input type="hidden" name="email" value={u.email} />
                     <div className="actions">
-                      <select name="role" defaultValue={u.role}>
+                      <select name="role" defaultValue={u.role} aria-label={`${u.email} の役割`} style={{ width: "auto" }}>
                         <option value="admin">管理者</option>
                         <option value="staff">担当者</option>
                       </select>
-                      <select name="active" defaultValue={u.active ? "on" : "off"}>
+                      <select name="active" defaultValue={u.active ? "on" : "off"} aria-label={`${u.email} を有効にするか`} style={{ width: "auto" }}>
                         <option value="on">有効</option>
                         <option value="off">無効</option>
                       </select>
@@ -138,7 +140,10 @@ export default async function SettingsPage({
                     <SubmitButton>保存</SubmitButton>
                   </form>
                 </td>
-                <td className="meta">{u.refreshTokenEnc ? "連携済み" : "未ログイン"}</td>
+                <td className="meta">
+                  <span className="rtable-label">Google 連携：</span>
+                  {u.refreshTokenEnc ? "連携済み" : "未ログイン"}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -147,26 +152,26 @@ export default async function SettingsPage({
           <input type="hidden" name="mode" value="add" />
           <div className="inline-form">
             <div>
-              <label>追加するメールアドレス</label>
-              <input name="email" type="email" placeholder="staff@yusando.com" required />
+              <label htmlFor="add-user-email">追加するメールアドレス</label>
+              <input id="add-user-email" name="email" type="email" placeholder="staff@yusando.com" required />
             </div>
             <div>
-              <label>役割</label>
-              <select name="role" defaultValue="staff">
+              <label htmlFor="add-user-role">役割</label>
+              <select id="add-user-role" name="role" defaultValue="staff">
                 <option value="staff">担当者</option>
                 <option value="admin">管理者</option>
               </select>
             </div>
           </div>
-          <div>
-            <label>見られるフォルダ（担当者のとき）</label>
+          <fieldset className="plain">
+            <legend>見られるフォルダ（担当者のとき）</legend>
             {FOLDER_KEYS.map((f) => (
               <label key={f} className="inline">
                 <input type="checkbox" name="visibleFolders" value={f} defaultChecked={f !== "keiri" && f !== "personal"} />
                 {folderName(f)}
               </label>
             ))}
-          </div>
+          </fieldset>
           <SubmitButton className="primary">追加</SubmitButton>
         </form>
       </div>
@@ -174,7 +179,7 @@ export default async function SettingsPage({
       <div className="panel">
         <h2>用途別アドレスとフォルダ</h2>
         <p className="meta">「内容で決める」は個人・総合窓口のアドレス用です。届いたメールの内容で業務フォルダを決め直します。</p>
-        <table className="simple">
+        <table className="simple rtable">
           <thead>
             <tr>
               <th>アドレス</th>
@@ -187,18 +192,21 @@ export default async function SettingsPage({
           <tbody>
             {addresses.map((a) => (
               <tr key={a.address}>
-                <td>{a.address}</td>
+                <td>
+                  <strong>{a.address}</strong>
+                </td>
                 <td colSpan={3}>
                   <form action={saveAddressAction} className="inline-form">
                     <input type="hidden" name="address" value={a.address} />
                     <div>
-                      <FolderSelect name="folder" value={a.folder} />
+                      <FolderSelect name="folder" value={a.folder} label={`${a.address} のフォルダ`} />
                     </div>
                     <label className="inline">
                       <input type="checkbox" name="contentDecides" defaultChecked={a.contentDecides} />
+                      <span className="visually-hidden">{a.address} は</span>内容で決める
                     </label>
                     <div>
-                      <input name="note" defaultValue={a.note} />
+                      <input name="note" defaultValue={a.note} aria-label={`${a.address} のメモ`} placeholder="メモ" />
                     </div>
                     <SubmitButton>保存</SubmitButton>
                   </form>
@@ -211,23 +219,30 @@ export default async function SettingsPage({
                 </td>
               </tr>
             ))}
+            {!addresses.length ? (
+              <tr>
+                <td className="meta" colSpan={5}>
+                  まだありません
+                </td>
+              </tr>
+            ) : null}
           </tbody>
         </table>
         <form action={saveAddressAction} className="inline-form" style={{ marginTop: 10 }}>
           <div>
-            <label>アドレスを追加</label>
-            <input name="address" type="email" placeholder="xxx@yusando.com" />
+            <label htmlFor="add-address">アドレスを追加</label>
+            <input id="add-address" name="address" type="email" placeholder="xxx@yusando.com" />
           </div>
           <div>
-            <label>フォルダ</label>
-            <FolderSelect name="folder" />
+            <label htmlFor="add-address-folder">フォルダ</label>
+            <FolderSelect name="folder" id="add-address-folder" />
           </div>
           <label className="inline">
             <input type="checkbox" name="contentDecides" /> 内容で決める
           </label>
           <div>
-            <label>メモ</label>
-            <input name="note" />
+            <label htmlFor="add-address-note">メモ</label>
+            <input id="add-address-note" name="note" />
           </div>
           <SubmitButton className="primary">追加</SubmitButton>
         </form>
@@ -260,19 +275,19 @@ export default async function SettingsPage({
         </table>
         <form action={saveRuleAction} className="inline-form" style={{ marginTop: 10 }}>
           <div>
-            <label>種類</label>
-            <select name="kind" defaultValue="domain">
+            <label htmlFor="rule-kind">種類</label>
+            <select id="rule-kind" name="kind" defaultValue="domain">
               <option value="domain">ドメイン</option>
               <option value="sender">送信者アドレス</option>
             </select>
           </div>
           <div>
-            <label>ドメインまたはアドレス</label>
-            <input name="pattern" placeholder="例：tax-office.jp" />
+            <label htmlFor="rule-pattern">ドメインまたはアドレス</label>
+            <input id="rule-pattern" name="pattern" placeholder="例：tax-office.jp" />
           </div>
           <div>
-            <label>フォルダ</label>
-            <FolderSelect name="folder" value="keiri" withBlock />
+            <label htmlFor="rule-folder">フォルダ</label>
+            <FolderSelect name="folder" value="keiri" withBlock id="rule-folder" />
           </div>
           <SubmitButton className="primary">追加</SubmitButton>
         </form>
@@ -298,12 +313,12 @@ export default async function SettingsPage({
         <form action={saveSignaturesAction} className="stack">
           <div className="grid2">
             <div>
-              <label>日本語</label>
-              <textarea name="ja" rows={6} defaultValue={signatures.ja} />
+              <label htmlFor="sig-ja">日本語</label>
+              <textarea id="sig-ja" name="ja" rows={6} defaultValue={signatures.ja} />
             </div>
             <div>
-              <label>英語（日本語以外のメールに使う）</label>
-              <textarea name="en" rows={6} defaultValue={signatures.en} />
+              <label htmlFor="sig-en">英語（日本語以外のメールに使う）</label>
+              <textarea id="sig-en" name="en" rows={6} defaultValue={signatures.en} />
             </div>
           </div>
           <details>
@@ -315,12 +330,12 @@ export default async function SettingsPage({
             ))}
             <div className="stack">
               <div>
-                <label>アドレス</label>
-                <input name="overrideAddress" placeholder="wholesale@yusando.com" />
+                <label htmlFor="sig-addr">アドレス</label>
+                <input id="sig-addr" name="overrideAddress" placeholder="wholesale@yusando.com" />
               </div>
               <div className="grid2">
-                <textarea name="overrideJa" rows={5} placeholder="日本語の署名（空で削除）" />
-                <textarea name="overrideEn" rows={5} placeholder="英語の署名（空で削除）" />
+                <textarea name="overrideJa" aria-label="このアドレスの日本語の署名" rows={5} placeholder="日本語の署名（空で削除）" />
+                <textarea name="overrideEn" aria-label="このアドレスの英語の署名" rows={5} placeholder="英語の署名（空で削除）" />
               </div>
             </div>
           </details>
@@ -335,8 +350,8 @@ export default async function SettingsPage({
           <div className="grid2">
             {DATE_KINDS.map((k) => (
               <div key={k}>
-                <label>{DATE_KIND_LABELS[k]}</label>
-                <select name={k} defaultValue={calendarMap[k]}>
+                <label htmlFor={`calmap-${k}`}>{DATE_KIND_LABELS[k]}</label>
+                <select id={`calmap-${k}`} name={k} defaultValue={calendarMap[k]}>
                   <option value="primary">メイン</option>
                   {calendars
                     .filter((c) => !c.primary)
@@ -363,16 +378,16 @@ export default async function SettingsPage({
           </div>
           <div className="inline-form">
             <div>
-              <label>開始</label>
-              <input type="time" name="start" defaultValue={hours.start} />
+              <label htmlFor="hours-start">開始</label>
+              <input id="hours-start" type="time" name="start" defaultValue={hours.start} />
             </div>
             <div>
-              <label>終了</label>
-              <input type="time" name="end" defaultValue={hours.end} />
+              <label htmlFor="hours-end">終了</label>
+              <input id="hours-end" type="time" name="end" defaultValue={hours.end} />
             </div>
             <div>
-              <label>1枠（分）</label>
-              <input type="number" name="slotMinutes" defaultValue={hours.slotMinutes} min={15} step={15} />
+              <label htmlFor="hours-slot">1枠（分）</label>
+              <input id="hours-slot" type="number" name="slotMinutes" defaultValue={hours.slotMinutes} min={15} step={15} />
             </div>
             <SubmitButton>保存</SubmitButton>
           </div>
@@ -393,8 +408,8 @@ export default async function SettingsPage({
             </p>
             <form action={selectFreeeCompanyAction} className="inline-form">
               <div>
-                <label>送り先の事業所</label>
-                <select name="companyId" defaultValue={freee.companyId ?? undefined}>
+                <label htmlFor="freee-company">送り先の事業所</label>
+                <select id="freee-company" name="companyId" defaultValue={freee.companyId ?? undefined}>
                   {freee.companies.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
@@ -445,7 +460,7 @@ export default async function SettingsPage({
         <details>
           <summary>会社情報（全ての下書きで Claude に渡します）</summary>
           <form action={saveBusinessContextAction} className="stack">
-            <textarea name="businessContext" rows={14} defaultValue={businessContext} />
+            <textarea name="businessContext" aria-label="会社情報" rows={14} defaultValue={businessContext} />
             <SubmitButton>保存</SubmitButton>
           </form>
         </details>
@@ -454,7 +469,7 @@ export default async function SettingsPage({
             <summary>{CATEGORY_LABELS[c]}</summary>
             <form action={savePlaybookAction} className="stack">
               <input type="hidden" name="category" value={c} />
-              <textarea name="guidance" rows={8} defaultValue={playbookMap.get(c) ?? ""} />
+              <textarea name="guidance" aria-label={`${CATEGORY_LABELS[c]} の書き方`} rows={8} defaultValue={playbookMap.get(c) ?? ""} />
               <SubmitButton>保存</SubmitButton>
             </form>
           </details>
@@ -464,7 +479,9 @@ export default async function SettingsPage({
       <div className="panel">
         <h2 id="claude">Claude の接続</h2>
         {claudeFailure ? (
-          <div className="banner error">分類に失敗しています：{claudeFailure}</div>
+          <div className="banner error">
+            <span>分類に失敗しています：{claudeFailure}</span>
+          </div>
         ) : (
           <p className="meta">
             {claudeHealth.lastOkAt ? `最後に分類できたのは ${formatJst(new Date(claudeHealth.lastOkAt))} です。` : "まだ記録がありません。"}
@@ -498,8 +515,8 @@ export default async function SettingsPage({
         <p className="meta">あなたの受信箱にある過去のメールを、さかのぼって分類します（下書きは自動では作りません）。</p>
         <form action={backfillAction} className="inline-form">
           <div>
-            <label>何日分</label>
-            <input type="number" name="days" defaultValue={30} min={1} max={365} />
+            <label htmlFor="backfill-days">何日分</label>
+            <input id="backfill-days" type="number" name="days" defaultValue={30} min={1} max={365} />
           </div>
           <SubmitButton>取り込む</SubmitButton>
         </form>
@@ -547,6 +564,11 @@ export default async function SettingsPage({
                 <td className="meta">{log.target}</td>
               </tr>
             ))}
+            {!logs.length ? (
+              <tr>
+                <td className="meta">まだありません</td>
+              </tr>
+            ) : null}
           </tbody>
         </table>
       </div>

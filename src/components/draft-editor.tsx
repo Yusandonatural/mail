@@ -42,7 +42,7 @@ export function DraftEditor({
   const router = useRouter();
   const [text, setText] = useState(draft.text);
   const [instruction, setInstruction] = useState("");
-  const [status, setStatus] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ text: string; error?: boolean } | null>(null);
   const [pending, start] = useTransition();
   const placeholders = useMemo(() => findPlaceholders(text), [text]);
   const dirty = text !== draft.text;
@@ -51,29 +51,36 @@ export function DraftEditor({
     start(async () => {
       setStatus(null);
       const r = await fn();
-      setStatus(r.ok ? okMessage : (r.error ?? "失敗しました"));
+      setStatus(r.ok ? { text: okMessage } : { text: r.error ?? "失敗しました", error: true });
       if (r.ok) router.refresh();
     });
 
   return (
-    <div className="panel stack">
-      <h2>
-        {label}
+    <section className="panel stack" aria-labelledby={`draft-${draft.id}`}>
+      <h2 className="draft-head">
+        <span id={`draft-${draft.id}`}>{label}</span>
         <span className="meta">
-          v{draft.version}
+          {draft.version > 1 ? `第${draft.version}版` : ""}
           {draft.instruction ? `・指示「${draft.instruction}」` : ""}
         </span>
       </h2>
       {draft.notes ? <div className="notes">{draft.notes}</div> : null}
-      <textarea data-draft rows={16} value={text} onChange={(e) => setText(e.target.value)} />
+      <textarea
+        data-draft
+        className="draft-text"
+        aria-labelledby={`draft-${draft.id}`}
+        rows={16}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
       {placeholders.length ? (
         <div className="placeholder-list">
-          埋めてほしい箇所（{placeholders.length}）：{placeholders.map((p) => p.label || "（無題）").join("、")}
+          【要確認】が{placeholders.length}か所あります（{placeholders.map((p) => p.label || "無題").join("、")}）。埋めると送信できます
         </div>
       ) : (
-        <div className="meta">【要確認】は全て埋まっています</div>
+        <div className="check-ok">✓ 【要確認】はありません</div>
       )}
-      <div className="actions">
+      <div className="send-row">
         <SendButton
           clientId={clientId}
           email={userEmail}
@@ -86,8 +93,9 @@ export function DraftEditor({
             router.refresh();
           }}
         />
+        <span className="spacer" />
         <button type="button" disabled={!dirty || pending} onClick={() => run(() => saveDraftAction(draft.id, text), "保存しました")}>
-          保存
+          {dirty ? "保存" : "保存済み"}
         </button>
         <a
           className="button"
@@ -98,10 +106,10 @@ export function DraftEditor({
           Gmail で開く
         </a>
       </div>
-      <details open={beforeTranslate !== null}>
+      <details className="tool" open={beforeTranslate !== null}>
         <summary>翻訳する</summary>
         <div className="stack">
-          <p className="meta">日本語で書いた返信を訳して、下書き欄を置き換えます。署名は訳した言語のものに差し替えます。保存も送信もまだしません。</p>
+          <p className="meta">日本語で書いた返信を訳して、上の本文と置き換えます。署名も訳した言語のものにします。保存・送信はまだしません。</p>
           <div className="inline-form">
             <div>
               <label htmlFor={`target-${draft.id}`}>翻訳先</label>
@@ -122,16 +130,16 @@ export function DraftEditor({
                   const original = text;
                   const r = await translateReplyAction(draft.id, original, target);
                   if (!r.ok || !r.data) {
-                    setStatus(r.ok ? "翻訳できませんでした" : r.error);
+                    setStatus({ text: r.ok ? "翻訳できませんでした" : r.error, error: true });
                     return;
                   }
                   setBeforeTranslate(original);
                   setText(r.data.text);
-                  setStatus(`${LANGUAGE_LABELS[target as keyof typeof LANGUAGE_LABELS]}に訳しました。内容を確かめてから保存・送信してください`);
+                  setStatus({ text: `${LANGUAGE_LABELS[target as keyof typeof LANGUAGE_LABELS]}に訳しました。内容を確かめてから保存・送信してください` });
                 })
               }
             >
-              翻訳して置き換える
+              翻訳する
             </button>
           </div>
           {beforeTranslate !== null ? (
@@ -143,7 +151,7 @@ export function DraftEditor({
                   onClick={() => {
                     setText(beforeTranslate);
                     setBeforeTranslate(null);
-                    setStatus("元の日本語に戻しました");
+                    setStatus({ text: "元の日本語に戻しました" });
                   }}
                 >
                   元に戻す
@@ -154,8 +162,8 @@ export function DraftEditor({
           ) : null}
         </div>
       </details>
-      <details>
-        <summary>書き直す（Claude）</summary>
+      <details className="tool">
+        <summary>Claude に書き直してもらう</summary>
         <div className="stack">
           <div className="actions">
             {PRESETS.map((p) => (
@@ -178,10 +186,20 @@ export function DraftEditor({
           </div>
           <div className="inline-form">
             <div>
+              <label htmlFor={`instruction-${draft.id}`} className="visually-hidden">
+                書き直しの指示
+              </label>
               <input
+                id={`instruction-${draft.id}`}
                 value={instruction}
-                placeholder="自由に指示（例：来週は不在と伝えて）"
+                placeholder="指示を書く（例：来週は不在と伝えて）"
                 onChange={(e) => setInstruction(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing && instruction.trim() && !pending) {
+                    e.preventDefault();
+                    run(() => generateDraftAction(rowId, instruction), "書き直しました");
+                  }
+                }}
               />
             </div>
             <button
@@ -192,12 +210,13 @@ export function DraftEditor({
               書き直す
             </button>
           </div>
-          {dirty ? <div className="meta">手で直した内容は上書きされず、別案として新しい下書きができます。</div> : null}
+          {dirty ? <div className="meta">手で直した本文は消えません。書き直しは別案として増えます。</div> : null}
         </div>
       </details>
-      {pending ? <div className="meta">処理中…（Claude の下書きは数十秒かかることがあります）</div> : null}
-      {status ? <div className="meta">{status}</div> : null}
-    </div>
+      <div role="status" aria-live="polite">
+        {pending ? <div className="status busy">処理中…（Claude は数十秒かかることがあります）</div> : status ? <div className={status.error ? "placeholder-list" : "status"}>{status.text}</div> : null}
+      </div>
+    </section>
   );
 }
 
@@ -215,6 +234,7 @@ export function DraftCreate({ rowId }: { rowId: number }) {
   return (
     <div className="panel stack">
       <h2>返信</h2>
+      <p className="meta">まだ下書きがありません。</p>
       <div className="actions">
         <button type="button" className="primary" disabled={pending} onClick={() => go(() => generateDraftAction(rowId, null))}>
           下書きを作る（Claude）
@@ -226,8 +246,10 @@ export function DraftCreate({ rowId }: { rowId: number }) {
           手で書く
         </button>
       </div>
-      {pending ? <div className="meta">作成中…</div> : null}
-      {error ? <div className="placeholder-list">{error}</div> : null}
+      <div role="status" aria-live="polite">
+        {pending ? <div className="status busy">作成中…（数十秒かかることがあります）</div> : null}
+        {error ? <div className="placeholder-list">{error}</div> : null}
+      </div>
     </div>
   );
 }
