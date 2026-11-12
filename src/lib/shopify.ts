@@ -180,15 +180,17 @@ export class ShopifyStore implements ShopInfo {
 
   async searchProducts(query: string): Promise<string> {
     const q = query.trim().slice(0, 100);
+    // 公開中の商品だけを探す（メール本文から「status:draft」などを混ぜられても、未発表の商品を出さない）
+    const search = `(${q.replace(/[()]/g, " ")}) AND status:active`;
     let nodes: ProductNode[];
     try {
-      nodes = (await this.gql<{ products: { nodes: ProductNode[] } }>(PRODUCTS(true), { q })).products.nodes;
+      nodes = (await this.gql<{ products: { nodes: ProductNode[] } }>(PRODUCTS(true), { q: search })).products.nodes;
     } catch (err) {
       // 在庫を読む権限（read_inventory）が無いトークンでは、在庫抜きで探し直す
       if (!(err instanceof ShopifyError) || !/inventory|access/i.test(err.message)) throw err;
-      nodes = (await this.gql<{ products: { nodes: ProductNode[] } }>(PRODUCTS(false), { q })).products.nodes;
+      nodes = (await this.gql<{ products: { nodes: ProductNode[] } }>(PRODUCTS(false), { q: search })).products.nodes;
     }
-    return formatProducts(nodes) ?? `「${q}」に当たる商品は見つかりませんでした。`;
+    return formatProducts(nodes.filter((n) => n.status === "ACTIVE")) ?? `「${q}」に当たる商品は見つかりませんでした。`;
   }
 
   async findOrders(q: { customerEmail: string; orderNumber?: string }): Promise<string> {

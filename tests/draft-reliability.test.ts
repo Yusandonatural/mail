@@ -198,7 +198,7 @@ describe("下書き用のカレンダー（日をまたぐ予定）", () => {
     const db = await testDb();
     await putSetting(db, "businessHours", HOURS as never);
     const out = await calendarTools(db, calendar, fromJst(2026, 11, 12, 12)).check("2026-11-20", "2026-11-21");
-    expect(out).toContain("11月20日(金): 予定 終日 出張 / 11月19日(木) 22:00〜11月20日(金) 7:00 夜行バス。");
+    expect(out).toContain("11月20日(金): 予定 終日 外出・休みなどの可能性 / 11月19日(木) 22:00〜11月20日(金) 7:00 予定あり。");
     // 終わりの日（11/21）は含まない
     expect(out).toContain("11月21日(土): 休み。予定 なし。");
   });
@@ -207,7 +207,7 @@ describe("下書き用のカレンダー（日をまたぐ予定）", () => {
     const db = await testDb();
     await putSetting(db, "businessHours", HOURS as never);
     const out = await calendarTools(db, calendar, fromJst(2026, 11, 12, 12)).freeSlots({ fromDate: "2026-11-20", count: 2 });
-    expect(out.split("\n")).toEqual(["- 11月20日(金) 9:00〜10:00（この日は終日の予定あり: 出張）", "- 11月23日(月) 9:00〜10:00"]);
+    expect(out.split("\n")).toEqual(["- 11月20日(金) 9:00〜10:00（この日は終日の予定あり: 外出・休みなどの可能性）", "- 11月23日(月) 9:00〜10:00"]);
   });
 });
 

@@ -61,7 +61,7 @@ async function row(db: Db, id: string) {
 }
 
 describe("Gmail で直接行った操作の反映", () => {
-  it("Gmail でアーカイブしたメールはアーカイブにし、Gmail の要返信も外す", async () => {
+  it("Gmail でアーカイブしたメールはアーカイブにする。スヌーズと区別できないので要返信は残し、ラベルにも触らない", async () => {
     const { db, user, mail } = await setup([
       { id: "a", status: "new", needsReply: true },
       { id: "n", status: "done" },
@@ -69,11 +69,15 @@ describe("Gmail で直接行った操作の反映", () => {
     mail.change("a", [], ["INBOX"]);
     mail.change("n", [], ["INBOX"]);
     await sync(db, mail, user);
-    expect(await row(db, "a")).toMatchObject({ status: "archived", needsReply: false });
+    expect(await row(db, "a")).toMatchObject({ status: "archived", needsReply: true });
     expect(await row(db, "n")).toMatchObject({ status: "archived" });
-    // 要返信だった行だけ、アプリのアーカイブと同じく対応済のラベルを付ける
-    expect(mail.labelsAddedTo("a")).toContain(STATUS_LABELS.done);
+    expect(mail.labelsAddedTo("a")).toEqual([]);
     expect(mail.labelsAddedTo("n")).toEqual([]);
+    // スヌーズが明けて受信トレイに戻ったら、要返信のまま一覧に戻る
+    mail.change("a", ["INBOX"], []);
+    await sync(db, mail, user);
+    expect(await row(db, "a")).toMatchObject({ status: "new", needsReply: true });
+    void STATUS_LABELS;
   });
 
   it("受信トレイに無かったメール（受信トレイをスキップ）や、迷惑メール・ゴミ箱の行はアーカイブにしない", async () => {

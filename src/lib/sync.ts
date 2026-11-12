@@ -1,6 +1,6 @@
-import { and, eq, inArray, isNull, max, ne, notInArray } from "drizzle-orm";
+import { and, eq, inArray, isNull, max, ne, notInArray, or } from "drizzle-orm";
 import type { Db } from "./db";
-import { dateCandidates, messages, users, type User } from "./db/schema";
+import { drafts, messages, users, type User } from "./db/schema";
 import { folderLabelName, isFolder, STATUS_LABELS } from "./domain";
 import { HistoryExpiredError, type HistoryChanges, type MailApi } from "./google/mail-api";
 import { markRepliedLabels } from "./pipeline";
@@ -143,7 +143,7 @@ async function threadSentTimes(db: Db, mail: MailApi, user: User, inboxIds: stri
 /**
  * 人が Gmail（ウェブ・スマホ）で直接行った操作を一覧に反映する。DB だけを変え、Gmail は呼ばない（ロックの中で呼ぶため）。
  * アプリ自身のアーカイブ・迷惑メール・ゴミ箱も同じ履歴で届くが、その行は既に archived / skipped なので何も変わらない。
- * 戻り値は、Gmail の「要返信」「下書きあり」を外して対応済にするメール（要返信・下書きありのままアーカイブされたもの）
+ * 戻り値は、Gmail の「要返信」「下書きあり」を外して対応済にするメール（今は無し。呼び出し側の形を保つため残す）
  */
 async function applyGmailChanges(
   db: Db,
@@ -167,39 +167,45 @@ async function applyGmailChanges(
   }
 
   // アーカイブされた（受信トレイから外された）。受信トレイに無かったメール（フィルタで受信トレイを
-  // スキップしたものなど）は INBOX が外れる履歴が無いので含まれない
+  // スキップしたものなど）は INBOX が外れる履歴が無いので含まれない。
+  // Gmail のスヌーズも受信トレイから外れるだけで区別できないので、「要返信」は消さずに残し、
+  // Gmail のラベルにも触らない（スヌーズが明けて受信トレイに戻ったら、要返信のまま一覧に戻す）
   if (archivedIds.length) {
-    const archive = { status: "archived", needsReply: false };
-    // 要返信・下書きありだった行は、アプリのアーカイブと同じく Gmail の「要返信」「下書きあり」も外して対応済にする
-    // （失敗しても一覧はアーカイブにする。ラベルは次に人が触るまで残る）
-    const open = await db
-      .update(messages)
-      .set(archive)
-      .where(and(mine(archivedIds), inArray(messages.status, ["new", "draft_ready"])))
-      .returning({ gmailMessageId: messages.gmailMessageId });
     await db
       .update(messages)
-      .set(archive)
+      .set({ status: "archived" })
       .where(and(mine(archivedIds), notInArray(messages.status, ["archived", "skipped"])));
-    relabel.push(...open.map((r) => r.gmailMessageId));
   }
 
-  // 受信トレイに戻された：アーカイブした行を一覧に戻す。要返信はアーカイブで外れているので戻さず、
-  // このメールより後に自分たちの返信がスレッドにあれば返信済、無ければ対応済にする
+  // 受信トレイに戻された：アーカイブした行を一覧に戻す。このメールより後に自分たちの返信がスレッドにあれば返信済。
+  // 無ければ、要返信が残っていれば要返信（下書きがあれば下書きあり）、そうでなければ対応済にする
   if (inboxIds.length) {
     const rows = await db
-      .select({ id: messages.id, threadId: messages.gmailThreadId, receivedAt: messages.receivedAt })
+      .select({ id: messages.id, threadId: messages.gmailThreadId, receivedAt: messages.receivedAt, needsReply: messages.needsReply })
       .from(messages)
       .where(and(mine(inboxIds), eq(messages.status, "archived")));
-    const replied = rows
-      .filter((r) => (sentTimes.get(r.threadId) ?? []).some((t) => t >= r.receivedAt.getTime()))
-      .map((r) => r.id);
-    const done = rows.map((r) => r.id).filter((id) => !replied.includes(id));
-    for (const [status, ids] of [["replied", replied], ["done", done]] as const) {
+    const withDraft = new Set(
+      rows.length
+        ? (
+            await db
+              .select({ threadId: drafts.gmailThreadId })
+              .from(drafts)
+              .where(and(eq(drafts.userId, user.id), inArray(drafts.gmailThreadId, rows.map((r) => r.threadId)), eq(drafts.status, "ready")))
+          ).map((d) => d.threadId)
+        : [],
+    );
+    const groups: Record<"replied" | "done" | "new" | "draft_ready", number[]> = { replied: [], done: [], new: [], draft_ready: [] };
+    for (const r of rows) {
+      const answered = (sentTimes.get(r.threadId) ?? []).some((t) => t >= r.receivedAt.getTime());
+      if (answered) groups.replied.push(r.id);
+      else if (r.needsReply) groups[withDraft.has(r.threadId) ? "draft_ready" : "new"].push(r.id);
+      else groups.done.push(r.id);
+    }
+    for (const [status, ids] of Object.entries(groups)) {
       if (!ids.length) continue;
       await db
         .update(messages)
-        .set({ status, needsReply: false })
+        .set(status === "replied" || status === "done" ? { status, needsReply: false } : { status })
         .where(and(inArray(messages.id, ids), eq(messages.status, "archived")));
     }
   }
@@ -237,6 +243,8 @@ function unclassifiedConds(user: User) {
     isNull(messages.confidence),
     notInArray(messages.source, ["sender_rule", "domain_rule", "manual"]),
     notInArray(messages.status, ["archived", "skipped"]),
+    // 一斉配信として Claude を使わずにニュースレターへ入れたものは、分類し直しても変わらないので除く
+    or(eq(messages.needsReview, true), ne(messages.folder, "info")),
   );
 }
 
@@ -255,31 +263,21 @@ export async function requeueUnclassified(db: Db, user: User, now = new Date()):
       STATUS_LABELS.needsReview,
       STATUS_LABELS.needsReply,
     ];
-    await db.transaction(async (txRaw) => {
-      const tx = txRaw as unknown as Db;
-      await tx
-        .delete(dateCandidates)
-        .where(
-          and(
-            eq(dateCandidates.userId, user.id),
-            eq(dateCandidates.gmailMessageId, row.gmailMessageId),
-            eq(dateCandidates.status, "candidate"),
-          ),
-        );
-      await tx.delete(messages).where(eq(messages.id, row.id));
-      await enqueue(
-        tx,
-        "process_message",
-        {
-          userId: user.id,
-          messageId: row.gmailMessageId,
-          backfill: true,
-          removeLabels,
-          ...(row.status === "replied" || row.status === "draft_ready" ? { keepStatus: row.status } : {}),
-        },
-        `reclassify:${user.id}:${row.gmailMessageId}:${stamp}`,
-      );
-    });
+    // 行は消さずに残し、分類し直した結果で置き換える（順番待ちの間も一覧から消えない）。
+    // 新しく届いたメールと同じ順番で処理し、下書き・通知は作らない
+    const queued = await enqueue(
+      db,
+      "process_message",
+      {
+        userId: user.id,
+        messageId: row.gmailMessageId,
+        reclassify: true,
+        removeLabels,
+        ...(row.status === "replied" || row.status === "draft_ready" ? { keepStatus: row.status } : {}),
+      },
+      `reclassify:${user.id}:${row.gmailMessageId}:${stamp}`,
+    );
+    if (!queued) continue;
     n++;
   }
   return n;

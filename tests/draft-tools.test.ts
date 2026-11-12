@@ -46,7 +46,9 @@ describe("下書き用のカレンダー", () => {
   it("指定した日の予定と空き、休みの日を書き出す", async () => {
     const db = await dbWithHours();
     const out = await calendarTools(db, fakeCalendar(), fromJst(2026, 11, 12, 12)).check("2026-11-20", "2026-11-22");
-    expect(out).toContain("11月20日(金): 予定 10:00〜12:00 茶ツアー（山田様）。空き 9:00〜10:00、12:00〜17:00");
+    expect(out).toContain("11月20日(金): 予定 10:00〜12:00 予定あり。空き 9:00〜10:00、12:00〜17:00");
+    // 予定の名前（相手の名前など）は Claude に渡さない
+    expect(out).not.toContain("山田");
     expect(out).toContain("11月22日(日): 休み。");
     expect(await calendarTools(db, fakeCalendar()).check("来週", "2026-11-20")).toContain("YYYY-MM-DD");
   });
@@ -163,6 +165,29 @@ describe("Shopify の注文検索", () => {
     expect(other).not.toContain("朝摘み煎茶");
     expect(other).toContain("【要確認");
     expect(queries).toEqual(['email:"yamada@example.jp"', 'name:"#1001"']);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("下書き用の調べもので外に出さないもの", () => {
+  it("終日の予定は種類だけを伝え、支払期限などの事務の予定は区別する", async () => {
+    const { allDayKind } = await import("@/lib/drafts");
+    expect(allDayKind("出張（東京・山田様）")).toBe("外出・休みなどの可能性");
+    expect(allDayKind("支払期限：〇〇商事 請求書")).toBe("事務の予定（支払期限など）");
+  });
+
+  it("Shopify の商品検索は公開中の商品だけ", async () => {
+    const { ShopifyStore } = await import("@/lib/shopify");
+    const queries: string[] = [];
+    vi.stubGlobal("fetch", async (_u: string, init: RequestInit) => {
+      queries.push(JSON.parse(String(init.body)).variables.q);
+      const node = (title: string, status: string) => ({ title, status, productType: null, onlineStoreUrl: null, variants: { nodes: [] } });
+      return new Response(JSON.stringify({ data: { products: { nodes: [node("朝摘み煎茶", "ACTIVE"), node("新作（未発表）", "DRAFT")] } } }), { status: 200 });
+    });
+    const out = await new ShopifyStore("shop.example", "t").searchProducts("煎茶 OR status:draft");
+    expect(out).toContain("朝摘み煎茶");
+    expect(out).not.toContain("未発表");
+    expect(queries[0]).toBe("(煎茶 OR status:draft) AND status:active");
     vi.unstubAllGlobals();
   });
 });

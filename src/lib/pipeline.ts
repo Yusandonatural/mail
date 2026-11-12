@@ -104,6 +104,21 @@ export async function recordReply(
     .set({ status: "replied", needsReply: false })
     .where(and(...conds))
     .returning({ gmailMessageId: messages.gmailMessageId });
+  // Gmail で直接返信したときは、アプリに残っている古い下書き（返信より前に作ったもの）を閉じる。
+  // 残すと、同じ相手にもう一度送れてしまう
+  if (updated.length) {
+    await db
+      .update(drafts)
+      .set({ status: "discarded" })
+      .where(
+        and(
+          eq(drafts.userId, user.id),
+          eq(drafts.gmailThreadId, threadId),
+          eq(drafts.status, "ready"),
+          ...(sentAt ? [lte(drafts.createdAt, sentAt)] : []),
+        ),
+      );
+  }
   // 社内の人だけに宛てた返信（「〇〇さん、対応お願いします」など）では、同僚の受信箱のメールは閉じない
   if (opts.closeColleagues !== false) await closeForColleagues(db, user, threadId, sentAt);
   if (!updated.length) return;
@@ -197,6 +212,11 @@ export interface ProcessOptions {
    * 混雑が何時間も続いてもメールが一覧に出るように。直った後は「分類し直す」で分類できる
    */
   fallbackOnBusy?: boolean;
+  /**
+   * 「分類し直す」：既にある行を、分類し直した結果で置き換える。行は最後の記録まで残すので、
+   * 分類し直しの順番待ちの間もメールは一覧から消えない
+   */
+  reclassify?: boolean;
 }
 
 export async function processMessage(
@@ -212,8 +232,12 @@ export async function processMessage(
     .from(messages)
     .where(and(eq(messages.userId, user.id), eq(messages.gmailMessageId, gmailMessageId)))
     .limit(1);
-  // アプリで迷惑メール・ゴミ箱にした行（skipped）は、Gmail で戻されたときだけ処理し直す
-  if (existing.length && existing[0].status !== "skipped") return { kind: "skipped", reason: "already_processed" };
+  // アプリで迷惑メール・ゴミ箱にした行（skipped）は、Gmail で戻されたときだけ処理し直す。
+  // 「分類し直す」では、アーカイブ・迷惑メールにした行以外を置き換える
+  const replaceable =
+    existing.length &&
+    (existing[0].status === "skipped" || (opts.reclassify && existing[0].status !== "archived"));
+  if (existing.length && !replaceable) return { kind: "skipped", reason: "already_processed" };
 
   let raw;
   try {
@@ -226,8 +250,10 @@ export async function processMessage(
   // Gmail の迷惑メール・ゴミ箱から戻された：届いたメールとして分類し直す。古い行は最後の記録と同じ
   // トランザクションで消す（先に消すと、分類の失敗でやり直したときに「戻されたメール」と分からなくなり、
   // 迷惑メールに指定した送信者のメールを迷惑メールへ戻してしまう）
-  const restoredRowId = existing.length ? existing[0].id : null;
-  if (restoredRowId !== null && msg.labelIds.some((l) => l === "SPAM" || l === "TRASH")) {
+  const replaceRowId = existing.length ? existing[0].id : null;
+  const replaceStatus = existing.length ? existing[0].status : null;
+  const restoredRowId = replaceStatus === "skipped" ? replaceRowId : null;
+  if (replaceRowId !== null && msg.labelIds.some((l) => l === "SPAM" || l === "TRASH")) {
     return { kind: "skipped", reason: "already_processed" };
   }
   // 下書き（自分の下書きは From が自分なので、返信と取り違えないよう先に除く）
@@ -335,7 +361,7 @@ export async function processMessage(
 
   const messageRowId = await db.transaction(async (txRaw) => {
     const tx = txRaw as unknown as Db;
-    if (restoredRowId !== null) {
+    if (replaceRowId !== null) {
       await tx
         .delete(dateCandidates)
         .where(
@@ -345,10 +371,10 @@ export async function processMessage(
             eq(dateCandidates.status, "candidate"),
           ),
         );
-      // 同時に別の処理が戻していれば（行が skipped でなくなっていれば）何もしない
+      // 同時に別の処理で状態が変わっていれば（戻された・アーカイブされた等）何もしない
       const removed = await tx
         .delete(messages)
-        .where(and(eq(messages.id, restoredRowId), eq(messages.status, "skipped")))
+        .where(and(eq(messages.id, replaceRowId), eq(messages.status, replaceStatus!)))
         .returning({ id: messages.id });
       if (!removed.length) return null;
     }

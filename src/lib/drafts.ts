@@ -323,6 +323,15 @@ const hm = (d: Date) => {
   return `${p.hour}:${String(p.minute).padStart(2, "0")}`;
 };
 
+/**
+ * 終日の予定の種類だけを伝える（予定の名前には相手の名前などが入るので、メールの下書きを書く Claude には渡さない。
+ * 細工したメールで、ほかの人の予定を下書きに書かせられないように）。
+ * 支払期限などの事務の予定は、その日に人と会えるかには関係しないので区別する
+ */
+export function allDayKind(summary: string): string {
+  return /支払|期限|請求|振込|締め|〆/.test(summary) ? "事務の予定（支払期限など）" : "外出・休みなどの可能性";
+}
+
 /** 予定の期間。終日の予定は日本時間の日付で、終わりの日は含まない（Google カレンダーの形式） */
 function eventInterval(e: CalendarEvent): Interval {
   if (e.allDay) {
@@ -368,12 +377,12 @@ export function calendarTools(db: Db, calendar: CalendarApi, now = new Date()): 
           .filter((e) => onDay(e, day))
           .sort((a, b) => eventInterval(a).start.getTime() - eventInterval(b).start.getTime())
           .map((e) => {
-            if (e.allDay) return `終日 ${e.summary}`;
+            if (e.allDay) return `終日 ${allDayKind(e.summary)}`;
             const { start, end } = eventInterval(e);
-            // 日をまたぐ予定は日付も書く
+            // 日をまたぐ予定は日付も書く。予定の名前（相手の名前などが入る）は Claude に渡さない
             return start >= day && end <= next
-              ? `${hm(start)}〜${hm(end)} ${e.summary}`
-              : `${formatJst(start)}〜${formatJst(end)} ${e.summary}`;
+              ? `${hm(start)}〜${hm(end)} 予定あり`
+              : `${formatJst(start)}〜${formatJst(end)} 予定あり`;
           });
         const open = freeWindows(busy, hours, day);
         const isOpenDay = hours.days.includes(jstParts(day).weekday);
@@ -402,7 +411,9 @@ export function calendarTools(db: Db, calendar: CalendarApi, now = new Date()): 
       // 終日の予定（出張・休みなど）は「空き時間」として扱われることが多いので、候補の日に添えて判断させる
       return slots
         .map((s) => {
-          const allDay = events.filter((e) => e.allDay && onDay(e, startOfJstDay(s.start))).map((e) => e.summary);
+          const allDay = [
+            ...new Set(events.filter((e) => e.allDay && onDay(e, startOfJstDay(s.start))).map((e) => allDayKind(e.summary))),
+          ];
           return `- ${formatJst(s.start)}〜${hm(s.end)}${allDay.length ? `（この日は終日の予定あり: ${allDay.join("、")}）` : ""}`;
         })
         .join("\n");

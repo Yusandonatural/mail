@@ -201,13 +201,17 @@ describe("分類し直し", () => {
       { ...base, gmailMessageId: "failed", gmailThreadId: "t1", folder: "personal", source: "address", needsReview: true },
       { ...base, gmailMessageId: "manual", gmailThreadId: "t2", folder: "tour", source: "manual" },
       { ...base, gmailMessageId: "good", gmailThreadId: "t3", folder: "tour", source: "address", confidence: 0.9 },
+      // 一斉配信としてニュースレターに入れたもの：分類し直しても変わらないので数えない
+      { ...base, gmailMessageId: "news", gmailThreadId: "t4", folder: "info", source: "content" },
     ]);
     expect(await countUnclassified(db, user)).toBe(1);
     expect(await requeueUnclassified(db, user)).toBe(1);
+    // 行は分類し直すまで残る（一覧から消えない）。新しいメールと同じ順番で処理する
     const left = (await db.select().from(messages)).map((r) => r.gmailMessageId).sort();
-    expect(left).toEqual(["good", "manual"]);
+    expect(left).toEqual(["failed", "good", "manual", "news"]);
     const [job] = await db.select().from(jobs);
-    expect(job.payload).toMatchObject({ messageId: "failed", backfill: true });
+    expect(job.payload).toMatchObject({ messageId: "failed", reclassify: true });
+    expect(job.payload.backfill).toBeUndefined();
     expect(job.payload.removeLabels).toContain("悠三堂/個人");
     expect(job.payload.removeLabels).toContain("状態/要確認");
   });

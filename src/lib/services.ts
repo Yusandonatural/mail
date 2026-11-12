@@ -98,7 +98,8 @@ export function jobHandlers(db: Db): JobHandlers {
       }
       const keepStatus = p.keepStatus === "replied" || p.keepStatus === "draft_ready" ? p.keepStatus : undefined;
       await processMessage(deps, user, String(p.messageId), {
-        autoDraft: p.backfill !== true,
+        autoDraft: p.backfill !== true && p.reclassify !== true,
+        reclassify: p.reclassify === true,
         keepStatus,
         fallbackOnBusy: (job?.attempts ?? 1) >= CLASSIFY_FALLBACK_ATTEMPT,
       });

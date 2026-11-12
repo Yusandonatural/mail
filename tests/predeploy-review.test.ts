@@ -115,10 +115,10 @@ describe("Gmail の履歴の同期", () => {
     await syncUser(db, mail, u);
     expect(blocked).toEqual([]);
     const row = async (id: string) => (await db.select().from(messages).where(eq(messages.gmailMessageId, id)))[0];
-    expect(await row("open")).toMatchObject({ status: "archived", needsReply: false });
+    // Gmail でのアーカイブはスヌーズと区別できないので、要返信は残してラベルにも触らない
+    expect(await row("open")).toMatchObject({ status: "archived", needsReply: true });
     expect((await row("arc")).status).toBe("done");
-    // 要返信のままアーカイブされたメールは、Gmail でも対応済にしている
-    expect(mail.modifications.some((m) => m.id === "open" && m.add.length > 0)).toBe(true);
+    expect(mail.modifications.some((m) => m.id === "open" && !m.thread && m.add.length > 0)).toBe(false);
     expect((await db.select({ h: users.historyId }).from(users))[0].h).toBe("200");
   });
 });

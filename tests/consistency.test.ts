@@ -196,10 +196,11 @@ describe("分類し直しでも人が決めた状態を戻さない", () => {
     ]);
     expect(await countUnclassified(db, user)).toBe(1);
     expect(await requeueUnclassified(db, user)).toBe(1);
+    // 行は分類し直すまで残る（一覧から消えない）
     const left = (await db.select().from(messages)).map((r) => r.gmailMessageId).sort();
-    expect(left).toEqual(["archived", "moved", "trashed"]);
+    expect(left).toEqual(["archived", "moved", "replied", "trashed"]);
     const [job] = await db.select().from(jobs);
-    expect(job.payload).toMatchObject({ messageId: "replied", keepStatus: "replied" });
+    expect(job.payload).toMatchObject({ messageId: "replied", keepStatus: "replied", reclassify: true });
 
     // 返信は同僚がしたので、自分の Gmail のスレッドには返信が無い。それでも要返信に戻さない
     const mail = new FakeMail();
@@ -207,7 +208,9 @@ describe("分類し直しでも人が決めた状態を戻さない", () => {
     await processMessage({ db, mail, classifier: new FakeClassifier() }, user, "replied", {
       autoDraft: false,
       keepStatus: "replied",
+      reclassify: true,
     });
+    expect(await db.select().from(messages).where(eq(messages.gmailMessageId, "replied"))).toHaveLength(1);
     const [row] = await db.select().from(messages).where(eq(messages.gmailMessageId, "replied"));
     expect(row).toMatchObject({ status: "replied", needsReply: false, folder: "tour" });
     expect(mail.labelsAddedTo("replied")).not.toContain("状態/要返信");
@@ -378,5 +381,21 @@ describe("3回目のまとめ直し", () => {
     const r = await processMessage({ db, mail, classifier }, user, "x1");
     expect(r.kind).toBe("classified");
     expect(mail.modifications.some((m) => m.add.includes("SPAM"))).toBe(false);
+  });
+});
+
+describe("Gmail で直接返信したとき", () => {
+  it("返信より前に作ったアプリの下書きを閉じ、二重に送れないようにする", async () => {
+    const db = await testDb();
+    const user = await makeUser(db);
+    const mail = new FakeMail();
+    mail.add(groupMail("x1", "t1"));
+    await processMessage({ db, mail, classifier: new FakeClassifier() }, user, "x1");
+    await db.insert(drafts).values({ userId: user.id, gmailThreadId: "t1", replyToMessageId: "x1", gmailDraftId: "d-old", bodyHash: "h", createdAt: new Date(Date.now() - 60_000) });
+    mail.add(gmailMessage({ id: "s1", threadId: "t1", from: user.email, to: "guest@t.example", subject: "Re: x", labelIds: ["SENT"], date: new Date() }));
+    await processMessage({ db, mail, classifier: new FakeClassifier() }, user, "s1");
+    const [d] = await db.select().from(drafts);
+    expect(d.status).toBe("discarded");
+    expect((await rowOf(db, user.id)).status).toBe("replied");
   });
 });
