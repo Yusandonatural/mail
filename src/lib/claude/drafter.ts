@@ -67,7 +67,7 @@ const RULES = `あなたは株式会社悠三堂の代表・礒﨑遼太郎の�
 
 調べてから書く（ツール）:
 - 商品・価格・在庫・送料・返品に触れるときは、書く前にツールで確かめ、確かめた値だけを書く。オンラインストアの小売価格・販売中かどうか・商品ページの URL は search_products の結果をそのまま書いてよい（在庫は「現在」と添える）。配送・返品の決まりは shop_policies で確かめる。
-- 注文・発送の問い合わせは find_orders で、相手のメールアドレスと本文にある注文番号の両方を調べる。見つかった注文の状況（支払・発送・追跡番号）を答えに使う。見つからなければ【要確認：注文番号】として尋ねる。
+- 注文・発送の問い合わせは find_orders で調べる（本文に注文番号があれば指定し、無ければ省略してお客様の最近の注文を見る）。見つかった注文の状況（支払・発送・追跡番号）を答えに使う。見つからなければ【要確認：注文番号】として尋ねる。
 - 見学・茶ツアー・インターン・打合せ・取材など日程が話題なら、カレンダーを確かめる。相手が日時を挙げていれば check_calendar でその日を見て、空いていれば「その日時は今のところ空いております」と書き、埋まっていれば find_free_slots で代わりの候補を示す。日程の相談なら find_free_slots で候補を2〜3つ示す。いずれも「最終的なご案内は改めて」のように確定はさせない。ほかの予定の中身（誰と何をするか）は相手に書かない。
 - ツールが使えない・失敗した・見つからないときは、推測で書かずに【要確認】にする。
 - 返信に関係のあることだけを調べる。お礼だけ・事務連絡だけのメールならツールは使わなくてよい。
@@ -170,7 +170,7 @@ const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("YYYY-MM-DD（日�
  * 下書き用のツール。どれも読み取りだけ。失敗してもエラーにせず、Claude に「確かめられなかった」と返す。
  * 何を調べたかは log に残し、画面のメモに添える。
  */
-export function draftTools(tools: DraftTools, log: string[]) {
+export function draftTools(tools: DraftTools, log: string[], customerEmail = "") {
   const safe = async (label: string, fn: () => Promise<string>): Promise<string> => {
     try {
       const out = await fn();
@@ -195,14 +195,14 @@ export function draftTools(tools: DraftTools, log: string[]) {
       }),
       betaZodTool({
         name: "find_orders",
-        description: "オンラインストアの注文を、お客様のメールアドレスか注文番号（#1234 など）で探す。支払・発送の状況と追跡番号が返る。",
+        description:
+          "返信相手のお客様のオンラインストアの注文を探す。注文番号（#1234 など）を指定するとその注文を、省略するとお客様の最近の注文を返す。支払・発送の状況と追跡番号が返る。お客様本人の注文だけが返る。",
         inputSchema: z.object({
-          email: z.string().optional().describe("お客様のメールアドレス"),
-          order_number: z.string().optional().describe("注文番号（例: 1234 または #1234）"),
+          order_number: z.string().optional().describe("注文番号（例: 1234 または #1234）。省略可"),
         }),
-        run: ({ email, order_number }) =>
-          safe(`Shopify 注文検索（${[email, order_number].filter(Boolean).join("・")}）`, () =>
-            shop.findOrders({ email, orderNumber: order_number }),
+        run: ({ order_number }) =>
+          safe(`Shopify 注文検索（${order_number ?? customerEmail}）`, () =>
+            shop.findOrders({ customerEmail, orderNumber: order_number }),
           ),
       }),
       betaZodTool({
@@ -249,7 +249,7 @@ export const MAX_TOOL_TURNS = 8;
 export class ClaudeDraftWriter implements DraftWriter {
   async write(req: DraftRequest): Promise<DraftResult> {
     const log: string[] = [];
-    const tools = draftTools(req.tools, log);
+    const tools = draftTools(req.tools, log, req.senderEmail);
     // 必要に応じて Shopify・カレンダーを調べながら書く（SDK のツールランナーがやり取りを回す）。
     // 安全上の理由で応答が止まった場合は、サーバー側で推奨モデルに切り替えて続けさせる。
     const params = {

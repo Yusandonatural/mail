@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { calendarTools } from "@/lib/drafts";
 import { draftTools, userPrompt, type DraftRequest } from "@/lib/claude/drafter";
 import { formatProducts, htmlToPlain } from "@/lib/shopify";
@@ -73,12 +73,13 @@ describe("下書き用のツール", () => {
         calendar: null,
       },
       log,
+      "a@b.c",
     );
     expect(tools.map((t) => t.name)).toEqual(["search_products", "find_orders", "shop_policies"]);
     const search = tools.find((t) => t.name === "search_products")!;
     const orders = tools.find((t) => t.name === "find_orders")!;
     expect(await (search.run as (i: unknown) => Promise<string>)({ query: "煎茶" })).toContain("在庫 12");
-    expect(await (orders.run as (i: unknown) => Promise<string>)({ email: "a@b.c" })).toContain("【要確認】");
+    expect(await (orders.run as (i: unknown) => Promise<string>)({})).toContain("【要確認】");
     expect(log).toEqual(["Shopify 商品検索「煎茶」", "Shopify 注文検索（a@b.c）（取得できませんでした）"]);
   });
 
@@ -133,5 +134,35 @@ describe("Shopify の整形", () => {
     expect(text).toContain("ページ: https://yusando.example/products/sencha");
     expect(formatProducts([])).toBeNull();
     expect(htmlToPlain("<p>送料は<b>全国一律</b>&amp;無料</p><p>返品は7日以内</p>")).toBe("送料は全国一律&無料\n返品は7日以内");
+  });
+});
+
+describe("Shopify の注文検索", () => {
+  it("お客様本人の注文だけを返し、他人の注文番号では中身を出さない", async () => {
+    const { ShopifyStore } = await import("@/lib/shopify");
+    const order = (name: string, email: string) => ({
+      name,
+      email,
+      createdAt: "2026-11-01T00:00:00Z",
+      displayFinancialStatus: "PAID",
+      displayFulfillmentStatus: "FULFILLED",
+      totalPriceSet: { shopMoney: { amount: "3240", currencyCode: "JPY" } },
+      lineItems: { nodes: [{ name: "朝摘み煎茶", quantity: 2 }] },
+      fulfillments: [{ status: "SUCCESS", trackingInfo: [{ number: "1234", company: "ヤマト" }] }],
+    });
+    const queries: string[] = [];
+    vi.stubGlobal("fetch", async (_u: string, init: RequestInit) => {
+      const q = JSON.parse(String(init.body)).variables.q as string;
+      queries.push(q);
+      const nodes = q.includes("#1001") ? [order("#1001", "other@example.com")] : [order("#1002", "Yamada@Example.jp")];
+      return new Response(JSON.stringify({ data: { orders: { nodes } } }), { status: 200 });
+    });
+    const shop = new ShopifyStore("shop.example", "t");
+    expect(await shop.findOrders({ customerEmail: "yamada@example.jp" })).toContain("注文 #1002");
+    const other = await shop.findOrders({ customerEmail: "yamada@example.jp", orderNumber: "1001" });
+    expect(other).not.toContain("朝摘み煎茶");
+    expect(other).toContain("【要確認");
+    expect(queries).toEqual(['email:"yamada@example.jp"', 'name:"#1001"']);
+    vi.unstubAllGlobals();
   });
 });

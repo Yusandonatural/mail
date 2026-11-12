@@ -6,14 +6,18 @@
 export interface ShopInfo {
   /** キーワードで商品を探す（価格・在庫・バリエーション・ページの URL） */
   searchProducts(query: string): Promise<string>;
-  /** メールアドレスか注文番号で注文を探す */
-  findOrders(q: { email?: string; orderNumber?: string }): Promise<string>;
+  /**
+   * お客様（返信相手）の注文を探す。注文番号を指定しても、そのお客様の注文だけを返す
+   * （メール本文に他人の注文番号を書かれても、他のお客様の注文内容が下書きに入らないように）
+   */
+  findOrders(q: { customerEmail: string; orderNumber?: string }): Promise<string>;
   /** 配送・返品・支払いなどストアの規約 */
   policies(): Promise<string>;
 }
 
 interface OrderNode {
   name: string;
+  email?: string | null;
   createdAt: string;
   displayFinancialStatus: string | null;
   displayFulfillmentStatus: string | null;
@@ -43,7 +47,7 @@ interface ProductNode {
 const ORDERS = `query Orders($q: String!) {
   orders(first: 5, query: $q, sortKey: CREATED_AT, reverse: true) {
     nodes {
-      name createdAt displayFinancialStatus displayFulfillmentStatus
+      name email createdAt displayFinancialStatus displayFulfillmentStatus
       totalPriceSet { shopMoney { amount currencyCode } }
       lineItems(first: 10) { nodes { name quantity } }
       fulfillments(first: 3) { status trackingInfo { number company } }
@@ -187,11 +191,17 @@ export class ShopifyStore implements ShopInfo {
     return formatProducts(nodes) ?? `「${q}」に当たる商品は見つかりませんでした。`;
   }
 
-  async findOrders(q: { email?: string; orderNumber?: string }): Promise<string> {
-    const query = orderSearchQuery(q);
-    if (!query) return "メールアドレスか注文番号を指定してください。";
+  async findOrders(q: { customerEmail: string; orderNumber?: string }): Promise<string> {
+    const customer = q.customerEmail.normalize("NFKC").trim().toLowerCase();
+    // 注文番号があれば番号で、無ければお客様のメールアドレスで探す
+    const query = orderSearchQuery(q.orderNumber ? { orderNumber: q.orderNumber } : { email: customer });
+    if (!query) return "お客様のメールアドレスがありません。";
     const data = await this.gql<{ orders: { nodes: OrderNode[] } }>(ORDERS, { q: query });
-    return formatOrders(data.orders.nodes) ?? "該当する注文は見つかりませんでした。";
+    const mine = data.orders.nodes.filter((o) => (o.email ?? "").trim().toLowerCase() === customer);
+    if (!mine.length && data.orders.nodes.length && q.orderNumber) {
+      return `注文番号 ${q.orderNumber} は見つかりましたが、このお客様（${customer}）の注文ではないため内容は出しません。【要確認：注文番号とご注文時のメールアドレス】として尋ねてください。`;
+    }
+    return formatOrders(mine) ?? "このお客様の注文は見つかりませんでした。";
   }
 
   async policies(): Promise<string> {
