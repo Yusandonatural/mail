@@ -15,6 +15,8 @@ export function KeyboardNav() {
       const t = ev.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
       if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+      // Tab で選んだリンク・ボタン（行の「削除」など）の Enter は、その要素の操作に任せる
+      if (ev.key === "Enter" && t && t.closest("a, button, summary, [role='button']")) return;
       const rows = Array.from(document.querySelectorAll<HTMLAnchorElement>("a.row"));
       const current = rows.findIndex((r) => r.classList.contains("selected"));
       const select = (i: number) => {

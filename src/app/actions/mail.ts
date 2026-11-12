@@ -7,7 +7,7 @@ import { getDb } from "@/lib/db";
 import { contacts, drafts, messages, rules, type MessageRow, type User } from "@/lib/db/schema";
 import { audit } from "@/lib/audit";
 import { BLOCK_RULE, folderLabelName, isFolder, STATUS_LABELS } from "@/lib/domain";
-import { canSeeMessage } from "@/lib/access";
+import { canSeeFolder, canSeeMessage } from "@/lib/access";
 import { generateDraft, saveDraftText } from "@/lib/drafts";
 import { LabelResolver } from "@/lib/labels";
 import { buildMime, replySubject } from "@/lib/mail/mime";
@@ -18,7 +18,7 @@ import { draftDeps, mailFor, pipelineDeps } from "@/lib/services";
 import { getSetting } from "@/lib/settings";
 import { bodyHash } from "@/lib/crypto";
 import { requireUser } from "@/lib/session";
-import { safeBack } from "@/lib/queries";
+import { safeBack, threadRowsOf } from "@/lib/queries";
 import { errorResult, ownMessage, type ActionResult } from "./common";
 
 /** フォルダを直す。「今後もこの送信者／ドメインは」を選べば学習ルールとして保存する（仕様書 4章） */
@@ -28,6 +28,8 @@ export async function moveFolder(formData: FormData): Promise<void> {
   const remember = String(formData.get("remember") ?? "");
   if (!isFolder(folder)) throw new Error("フォルダが正しくありません");
   const { user, row } = await ownMessage(rowId);
+  // 画面の選択肢は見られるフォルダだけ。見られないフォルダ（経理など）への移動やルール作成はさせない
+  if (!canSeeFolder(user, folder)) throw new Error("このフォルダには移動できません");
   const db = await getDb();
   const mail = mailFor(user);
   const labels = new LabelResolver(mail);
@@ -216,7 +218,7 @@ function isRemoveKind(v: unknown): v is RemoveKind {
  * アーカイブ・迷惑メール・ゴミ箱。Gmail 側を先に変え、成功した行だけアプリの一覧から外す。
  * ゴミ箱と迷惑メールは Gmail で30日間は元に戻せる。
  */
-async function removeRows(user: User, rows: MessageRow[], kind: RemoveKind): Promise<number> {
+async function removeRows(user: User, rows: MessageRow[], kind: RemoveKind): Promise<number[]> {
   const db = await getDb();
   const mail = mailFor(user);
   const done = kind === "archive" ? await new LabelResolver(mail).statusId("done") : null;
@@ -232,14 +234,20 @@ async function removeRows(user: User, rows: MessageRow[], kind: RemoveKind): Pro
       console.error(`${kind} failed`, row.gmailMessageId, err);
     }
   }
-  if (!ok.length) return 0;
+  if (!ok.length) return [];
   await db
     .update(messages)
-    .set({ status: kind === "archive" ? "done" : "skipped", needsReply: false, unread: false })
+    .set({ status: kind === "archive" ? "archived" : "skipped", needsReply: false, unread: false })
     .where(inArray(messages.id, ok));
   const action = kind === "spam" ? "spam" : kind === "trash" ? "trashed" : "archived";
   for (const row of rows.filter((r) => ok.includes(r.id))) await audit(db, user.id, action, row.gmailMessageId);
-  return ok.length;
+  return ok;
+}
+
+/** 選んだ行（スレッド）のうち、スレッドのメールを1通以上外せたものの数 */
+function removedThreads(selected: MessageRow[], expanded: MessageRow[], ok: number[]): number {
+  const done = new Set(expanded.filter((r) => ok.includes(r.id)).map((r) => r.gmailThreadId));
+  return new Set(selected.filter((r) => done.has(r.gmailThreadId)).map((r) => r.gmailThreadId)).size;
 }
 
 /** 迷惑メールにした送信者を、今後は届いた時点で迷惑メールへ移すルールにする。自社のアドレスは対象外 */
@@ -263,7 +271,10 @@ export async function archiveAction(formData: FormData): Promise<void> {
   const { user, row } = await ownMessage(Number(formData.get("rowId")));
   const kind = String(formData.get("kind"));
   if (!isRemoveKind(kind)) throw new Error("操作が正しくありません");
-  await removeRows(user, [row], kind);
+  // メール画面はスレッド全体を見せているので、スレッドごと外す
+  const thread = await threadRowsOf(await getDb(), user, [row]);
+  const ok = await removeRows(user, thread.length ? thread : [row], kind);
+  if (!ok.length) throw new Error(`${REMOVE_WORDS[kind]}にできませんでした。もう一度お試しください`);
   if (kind === "spam" && formData.get("block")) await blockSenders(user, [row]);
   revalidatePath("/", "layout");
   redirect(safeBack(String(formData.get("back") ?? "")));
@@ -304,10 +315,13 @@ export async function bulkRemoveAction(formData: FormData): Promise<void> {
   const back = safeBack(String(formData.get("back") ?? ""));
   const rows = await ownRows(user, ids);
   if (!rows.length) redirect(back);
-  const n = await removeRows(user, rows, kind);
+  // 一覧の行はスレッドの最新の1通なので、同じスレッドの古いメールもまとめて外す（残すと一覧に出直す）
+  const expanded = await threadRowsOf(await getDb(), user, rows);
+  const ok = await removeRows(user, expanded, kind);
+  const n = removedThreads(rows, expanded, ok);
   const blocked = kind === "spam" && formData.get("block") ? await blockSenders(user, rows) : 0;
   revalidatePath("/", "layout");
-  const failed = rows.length - n;
+  const failed = new Set(rows.map((r) => r.gmailThreadId)).size - n;
   redirect(
     withNotice(
       back,
@@ -323,6 +337,11 @@ export async function saveContactAction(formData: FormData): Promise<void> {
   const user = await requireUser();
   const db = await getDb();
   const email = String(formData.get("email")).toLowerCase();
+  // メモは下書きの材料になるので、その相手からのメールを見られる人だけが書ける
+  const visible = (
+    await db.select().from(messages).where(and(eq(messages.userId, user.id), eq(messages.fromEmail, email))).limit(20)
+  ).some((r) => canSeeMessage(user, r));
+  if (!visible) throw new Error("この相手のメモは編集できません");
   const values = {
     notes: String(formData.get("notes") ?? ""),
     organization: String(formData.get("organization") ?? "") || null,

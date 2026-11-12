@@ -111,7 +111,7 @@ export const DATE_KIND_LABELS: Record<DateKind, string> = {
 /** 分類の信頼度がこれ未満なら「要確認」を付ける（仕様書 4章） */
 export const REVIEW_CONFIDENCE_THRESHOLD = 0.7;
 
-export const MESSAGE_STATUSES = ["new", "draft_ready", "replied", "done", "skipped"] as const;
+export const MESSAGE_STATUSES = ["new", "draft_ready", "replied", "done", "archived", "skipped"] as const;
 export type MessageStatus = (typeof MESSAGE_STATUSES)[number];
 
 export const TIMEZONE = "Asia/Tokyo";

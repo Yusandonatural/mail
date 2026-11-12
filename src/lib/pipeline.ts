@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Db } from "./db";
 import { addressMap, contacts, dateCandidates, messages, rules, type User } from "./db/schema";
 import { classifyByHeaders, matchBlockRule, type SenderRule } from "./classify/stage1";
@@ -7,7 +7,7 @@ import type { Classifier, ContentClassification } from "./classify/types";
 import { DATE_KINDS, STATUS_LABELS, isFolder, type Folder } from "./domain";
 import { MessageNotFoundError, type MailApi } from "./google/mail-api";
 import { LabelResolver } from "./labels";
-import { listIdToAddress, parseMessage, stripQuoted, type ParsedMessage } from "./mail/parse";
+import { header, listIdToAddress, parseMessage, stripQuoted, type ParsedMessage } from "./mail/parse";
 import { enqueue } from "./jobs";
 import { canSeeMessage } from "./access";
 import { getSetting, recordClaudeResult } from "./settings";
@@ -71,24 +71,36 @@ async function reuseClassification(db: Db, rfcMessageId: string | null): Promise
   };
 }
 
-/** 自分たちが返信したスレッドの「要返信」を外し、対応済にする */
-export async function recordReply(deps: PipelineDeps, user: User, threadId: string): Promise<void> {
+/**
+ * 自分たちが返信したスレッドの「要返信」を外し、対応済にする。
+ * sentAt より後に届いたメール（返信の後に相手から来た新しいメール）は対象にしない。
+ * 過去メールの取り込みや再試行では、新しいメールが先に処理されることがあるため。
+ */
+export async function recordReply(deps: PipelineDeps, user: User, threadId: string, sentAt?: Date): Promise<void> {
   const { db, mail } = deps;
-  const pending = await db
-    .select()
-    .from(messages)
-    .where(and(eq(messages.userId, user.id), eq(messages.gmailThreadId, threadId)));
-  if (!pending.length) return;
-  await db
+  const conds = [
+    eq(messages.userId, user.id),
+    eq(messages.gmailThreadId, threadId),
+    inArray(messages.status, ["new", "draft_ready"]),
+  ];
+  if (sentAt) conds.push(lte(messages.receivedAt, sentAt));
+  const updated = await db
     .update(messages)
     .set({ status: "replied", needsReply: false })
-    .where(and(eq(messages.userId, user.id), eq(messages.gmailThreadId, threadId), inArray(messages.status, ["new", "draft_ready"])));
+    .where(and(...conds))
+    .returning({ gmailMessageId: messages.gmailMessageId });
+  if (!updated.length) return;
   const labels = new LabelResolver(mail);
   const remove = (
     await Promise.all([labels.existingId(STATUS_LABELS.needsReply), labels.existingId(STATUS_LABELS.draftReady)])
   ).filter((x): x is string => Boolean(x));
-  await mail.modifyThread(threadId, [await labels.statusId("done")], remove);
+  const done = await labels.statusId("done");
+  // 状態ラベルはメールごとに付けているので、外すのも対象のメールだけ（後から届いたメールの「要返信」は残す）
+  for (const u of updated) await mail.modifyMessage(u.gmailMessageId, [done], remove);
 }
+
+/** 転送（Fwd: / FW: / 転送:）。Gmail では転送したメールも同じスレッドに入るが、相手への返信ではない */
+const FORWARD_SUBJECT = /^\s*(fwd?|転送)\s*[:：]/i;
 
 export interface ProcessOptions {
   /** 過去メールの取り込みでは下書きを自動で作らない */
@@ -118,9 +130,13 @@ export async function processMessage(
     throw err;
   }
   const msg = parseMessage(raw);
+  // 下書き（自分の下書きは From が自分なので、返信と取り違えないよう先に除く）
+  if (msg.labelIds.includes("DRAFT")) return { kind: "skipped", reason: "DRAFT" };
 
   if (msg.labelIds.includes("SENT") || msg.from?.email === user.email) {
-    await recordReply(deps, user, msg.threadId);
+    // 社内への転送などは返信ではないので、スレッドの「要返信」はそのままにする
+    if (FORWARD_SUBJECT.test(msg.subject)) return { kind: "skipped", reason: "own_forward" };
+    await recordReply(deps, user, msg.threadId, msg.date);
     return { kind: "reply_recorded", threadId: msg.threadId };
   }
   const skipLabel = msg.labelIds.find((l) => SKIP_LABELS.includes(l));
@@ -375,6 +391,8 @@ async function answeredLater(mail: MailApi, user: User, msg: ParsedMessage): Pro
       const labels = m.labelIds ?? [];
       if (labels.includes("DRAFT")) return false;
       const ours = labels.includes("SENT");
+      // 社内への転送は返信ではない
+      if (ours && FORWARD_SUBJECT.test(header(m, "Subject") ?? "")) return false;
       return ours && Number(m.internalDate ?? 0) > msg.date.getTime();
     });
   } catch {

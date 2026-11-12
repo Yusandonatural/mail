@@ -101,7 +101,7 @@ export async function adoptGmailDrafts(db: Db, mail: MailApi, user: User, thread
       bodyHash: bodyHash(draftText(parseMessage(current.message))),
       notes: "Gmail で作られた下書きです（Claude のスキルや Gmail の画面で作成）",
       generatedBy: "gmail",
-    });
+    }).onConflictDoNothing();
     await db
       .update(messages)
       .set({ status: "draft_ready" })

@@ -37,20 +37,23 @@ export function MessageRowView({
   back: string;
   now?: Date;
 }) {
-  const open = m.needsReply && (m.status === "new" || m.status === "draft_ready");
+  // 行はスレッドの最新のメールだが、要返信・下書きはスレッドの中のどれか1通にあれば出す
+  // （要返信のメールの後に、返信の要らない「追伸」や自動返信が届いた場合など）
+  const open = m.threadOpen || (m.needsReply && (m.status === "new" || m.status === "draft_ready"));
+  const urgent = m.threadUrgent || (open && m.urgency === "high");
+  const draft = m.threadDraft || m.status === "draft_ready";
   const unread = m.threadUnread || m.unread;
   const sender = m.fromName || m.fromEmail;
   // 左端の細い帯で状態を示す：至急＞要返信＞下書きあり＞要確認
-  const state =
-    open && m.urgency === "high"
-      ? "state-urgent"
-      : open && m.status === "new"
-        ? "state-reply"
-        : m.status === "draft_ready"
-          ? "state-draft"
-          : m.needsReview
-            ? "state-review"
-            : "";
+  const state = urgent
+    ? "state-urgent"
+    : open && !draft
+      ? "state-reply"
+      : draft
+        ? "state-draft"
+        : m.needsReview
+          ? "state-review"
+          : "";
   // チェックと行ごとのボタンは、一覧を囲む form（bulkRemoveAction）に送られる
   return (
     <div className={["row-line", state, unread ? "is-unread" : ""].filter(Boolean).join(" ")}>
@@ -70,9 +73,9 @@ export function MessageRowView({
         <div className="subject">{m.subject || "(件名なし)"}</div>
         {m.summary ? <div className="summary">{m.summary}</div> : null}
         <div className="badges">
-          {m.urgency === "high" && open ? <span className="badge high">至急</span> : null}
-          {open && m.status === "new" ? <span className="badge reply">要返信</span> : null}
-          {m.status === "draft_ready" ? <span className="badge draft">下書きあり</span> : null}
+          {urgent ? <span className="badge high">至急</span> : null}
+          {open && !draft ? <span className="badge reply">要返信</span> : null}
+          {draft ? <span className="badge draft">下書きあり</span> : null}
           {m.needsReview ? <span className="badge review">要確認</span> : null}
           {m.suggestConfirm ? <span className="badge draft">確定の提案</span> : null}
           {m.hasDates ? <span className="badge date">日程あり</span> : null}

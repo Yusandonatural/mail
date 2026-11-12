@@ -123,7 +123,7 @@ export const drafts = pgTable(
     status: text("status").notNull().default("ready"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("drafts_thread").on(t.userId, t.gmailThreadId)],
+  (t) => [index("drafts_thread").on(t.userId, t.gmailThreadId), uniqueIndex("drafts_user_gmail_draft").on(t.userId, t.gmailDraftId)],
 );
 
 export const dateCandidates = pgTable(

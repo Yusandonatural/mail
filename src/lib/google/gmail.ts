@@ -10,6 +10,9 @@ function status(err: unknown): number | undefined {
   return e.status ?? e.response?.status ?? (Number.isFinite(code) ? code : undefined);
 }
 
+/** 届いたときに処理を飛ばすラベル（pipeline の SKIP_LABELS）。外されたら改めて処理する */
+const RESTORE_LABELS = new Set(["SPAM", "TRASH", "CATEGORY_PROMOTIONS"]);
+
 export class GoogleMailApi implements MailApi {
   private api: gmail_v1.Gmail;
 
@@ -40,6 +43,7 @@ export class GoogleMailApi implements MailApi {
   async listHistory(startHistoryId: string) {
     const ids = new Set<string>();
     const readIds = new Set<string>();
+    const restoredIds = new Set<string>();
     let pageToken: string | undefined;
     let historyId = startHistoryId;
     try {
@@ -58,6 +62,8 @@ export class GoogleMailApi implements MailApi {
           }
           for (const removed of h.labelsRemoved ?? []) {
             if (removed.message?.id && removed.labelIds?.includes("UNREAD")) readIds.add(removed.message.id);
+            // 迷惑メール・ゴミ箱・プロモーションから戻されたメール（届いたときは処理を飛ばしている）
+            if (removed.message?.id && removed.labelIds?.some((l) => RESTORE_LABELS.has(l))) restoredIds.add(removed.message.id);
           }
         }
         historyId = res.data.historyId ?? historyId;
@@ -67,7 +73,7 @@ export class GoogleMailApi implements MailApi {
       if (status(err) === 404) throw new HistoryExpiredError();
       throw err;
     }
-    return { messageIds: [...ids], readIds: [...readIds], historyId };
+    return { messageIds: [...ids], readIds: [...readIds], restoredIds: [...restoredIds], historyId };
   }
 
   async listMessageIds(query: string, max: number) {

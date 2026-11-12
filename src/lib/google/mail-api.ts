@@ -33,7 +33,10 @@ export interface MailApi {
   getThread(threadId: string): Promise<GmailThread>;
   /** startHistoryId 以降に追加されたメッセージ ID（下書きは除く）。古すぎれば HistoryExpiredError */
   /** readIds は Gmail 側（スマホの Gmail など）で既読にされたメッセージ */
-  listHistory(startHistoryId: string): Promise<{ messageIds: string[]; readIds: string[]; historyId: string }>;
+  /** restoredIds は迷惑メール・ゴミ箱・プロモーションから戻されたメッセージ（届いたときは処理を飛ばしている） */
+  listHistory(
+    startHistoryId: string,
+  ): Promise<{ messageIds: string[]; readIds: string[]; restoredIds?: string[]; historyId: string }>;
   listMessageIds(query: string, max: number): Promise<string[]>;
   listLabels(): Promise<Array<{ id: string; name: string }>>;
   createLabel(name: string): Promise<{ id: string; name: string }>;

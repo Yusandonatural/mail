@@ -15,6 +15,13 @@
       "when": 1790511289545,
       "tag": "0001_freee_and_push",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794460800000,
+      "tag": "0002_drafts_unique",
+      "breakpoints": true
     }
   ]
 }

@@ -26,7 +26,8 @@ export class LabelResolver {
     if (slash > 0) await this.id(name.slice(0, slash));
     try {
       const created = await this.mail.createLabel(name);
-      map.set(created.name, created.id);
+      // 親ラベルを作るときに一覧を取り直していることがあるので、今の一覧に入れる
+      (this.byName ?? map).set(created.name, created.id);
       return created.id;
     } catch (err) {
       // 別の処理が同時に同じラベルを作っていた（409）ときは、一覧を取り直してそれを使う

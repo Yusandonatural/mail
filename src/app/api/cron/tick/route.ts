@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
   if (!cronAuthorized(req.headers.get("authorization"))) {
     return new NextResponse("unauthorized", { status: 401 });
   }
+  const started = Date.now();
   const db = await getDb();
   const active = await db
     .select()
@@ -28,7 +29,11 @@ export async function POST(req: NextRequest) {
   for (const user of active) {
     try {
       const mail = mailFor(user);
-      await ensureWatch(db, mail, user, config().GMAIL_PUBSUB_TOPIC);
+      // watch の更新に失敗しても（Pub/Sub の権限など）、取りこぼしの同期は続ける。
+      // ここで止めると push も届かないので、メールが一切取り込まれなくなる
+      await ensureWatch(db, mail, user, config().GMAIL_PUBSUB_TOPIC).catch((e) => {
+        console.error("watch renew failed for", user.email, e);
+      });
       const fresh = (await db.select().from(users).where(eq(users.id, user.id)).limit(1))[0];
       const queued = await syncUser(db, mail, fresh);
       // Claude のスキルなどで Gmail に作られた返信下書きを取り込み、受信箱の一番上に出す
@@ -42,6 +47,8 @@ export async function POST(req: NextRequest) {
       results[user.email] = `error: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
-  const ran = await runJobs(db, jobHandlers(db), 240_000);
+  // 同期に使った時間を差し引き、maxDuration（300 秒）の途中でジョブが打ち切られないようにする
+  const budget = Math.max(0, 240_000 - (Date.now() - started));
+  const ran = budget > 0 ? await runJobs(db, jobHandlers(db), budget) : 0;
   return NextResponse.json({ users: results, jobsRun: ran });
 }

@@ -78,7 +78,10 @@ export function parseAddressList(value: string | null | undefined): Address[] {
       const email = angle[2].trim().toLowerCase();
       if (email.includes("@")) result.push({ name: name || null, email });
     } else if (part.includes("@")) {
-      result.push({ name: null, email: part.replace(/^mailto:/i, "").toLowerCase() });
+      // 古い形式「taro@example.jp (山田太郎)」は、括弧の中を名前として扱う（アドレスに混ぜない）
+      const comment = part.match(/^(\S+@\S+?)\s*\((.*)\)\s*$/);
+      const email = (comment ? comment[1] : part).replace(/^mailto:/i, "").toLowerCase();
+      result.push({ name: comment?.[2].trim() || null, email });
     }
   }
   return result;

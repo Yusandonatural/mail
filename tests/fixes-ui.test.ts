@@ -132,3 +132,19 @@ describe("一覧の時刻と見出し", () => {
     expect(dayGroupLabel(new Date("2026-10-01T05:00:00Z"), now)).toBe("10月");
   });
 });
+
+describe("アーカイブ", () => {
+  it("アーカイブしたメールは受信箱・件数に出さない", async () => {
+    const db = await testDb();
+    const user = await makeUser(db);
+    const base = { userId: user.id, fromEmail: "a@b.c", source: "address", receivedAt: new Date(), folder: "tour", needsReply: true };
+    await db.insert(messages).values([
+      { ...base, gmailMessageId: "kept", gmailThreadId: "t1", status: "new" },
+      { ...base, gmailMessageId: "gone", gmailThreadId: "t2", status: "archived", needsReply: false },
+    ]);
+    const rows = await listMessages(db, user, { folder: null, filter: "all", page: 0 });
+    expect(rows.map((r) => r.gmailMessageId)).toEqual(["kept"]);
+    const tour = await listMessages(db, user, { folder: "tour", filter: "all", page: 0 });
+    expect(tour.map((r) => r.gmailMessageId)).toEqual(["kept"]);
+  });
+});

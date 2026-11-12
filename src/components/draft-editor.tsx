@@ -80,7 +80,8 @@ export function DraftEditor({
           disabled={placeholders.length > 0 || pending}
           prepare={() => prepareSendAction(draft.id, text)}
           after={async (sent) => {
-            await markSentAction(draft.id);
+            const r = await markSentAction(draft.id);
+            if (!r.ok) throw new Error(r.error);
             router.push(withSentNotice(backHref, "返信を送信しました", sent.threadId));
             router.refresh();
           }}

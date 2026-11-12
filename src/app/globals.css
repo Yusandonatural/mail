@@ -519,7 +519,9 @@ details > summary::marker { color: var(--accent); }
   .nav { flex-direction: row; gap: 4px; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
   .nav a { border: 1px solid var(--line); border-radius: 999px; flex: none; gap: 6px; padding: 4px 12px; background: var(--panel); }
   .nav .icon { display: none; }
-  .nav-section, .account { display: none; }
+  .nav-section { display: none; }
+  /* ログアウトはメニューの下に小さく残す */
+  .account { flex-direction: row; align-items: center; justify-content: space-between; margin: 0; padding: 2px 4px 0; }
   .nav-bottom { margin: 0; padding: 0; border: 0; }
   .notify-toggle { margin: 0; }
   .main { padding: 14px 12px 88px; }

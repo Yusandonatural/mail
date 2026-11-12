@@ -82,8 +82,16 @@ export class FakeMail implements MailApi {
     return { id: threadId, messages: [...this.messages.values()].filter((m) => m.threadId === threadId) };
   }
   readIds: string[] = [];
+  restoredIds: string[] = [];
+  /** 指定すれば listHistory の messageIds をこれにする（既定は全メッセージ） */
+  historyIds: string[] | null = null;
   async listHistory() {
-    return { messageIds: [...this.messages.keys()], readIds: this.readIds, historyId: "200" };
+    return {
+      messageIds: this.historyIds ?? [...this.messages.keys()],
+      readIds: this.readIds,
+      restoredIds: this.restoredIds,
+      historyId: "200",
+    };
   }
   async listMessageIds() {
     return [...this.messages.keys()];

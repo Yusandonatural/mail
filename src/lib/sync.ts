@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, notInArray } from "drizzle-orm";
+import { and, eq, inArray, isNull, max, notInArray } from "drizzle-orm";
 import type { Db } from "./db";
 import { dateCandidates, messages, users, type User } from "./db/schema";
 import { folderLabelName, isFolder, STATUS_LABELS } from "./domain";
@@ -48,8 +48,15 @@ export async function syncUser(db: Db, mail: MailApi, user: User): Promise<numbe
     return 0;
   }
   try {
-    const { messageIds, readIds, historyId } = await mail.listHistory(user.historyId);
-    const n = await enqueueMessages(db, user, messageIds);
+    const { messageIds, readIds, restoredIds = [], historyId } = await mail.listHistory(user.historyId);
+    let n = await enqueueMessages(db, user, messageIds);
+    // Gmail の迷惑メールなどから人が戻したメール。届いたときのジョブは「飛ばした」で終わっているので別のキーで積む
+    // （既に一覧にあるメールは processMessage が二重に作らない）
+    const added = new Set(messageIds);
+    for (const id of restoredIds) {
+      if (added.has(id)) continue;
+      if (await enqueue(db, "process_message", { userId: user.id, messageId: id }, `restore:${user.id}:${id}:${historyId}`)) n++;
+    }
     if (readIds.length) {
       await db
         .update(messages)
@@ -62,11 +69,30 @@ export async function syncUser(db: Db, mail: MailApi, user: User): Promise<numbe
     if (!(err instanceof HistoryExpiredError)) throw err;
     // 履歴が古すぎる：直近2日分を拾い直す（処理済みは重複キーで弾かれる）
     const ids = await mail.listMessageIds("newer_than:2d -in:drafts", 500);
-    const n = await enqueueMessages(db, user, ids);
+    let n = await enqueueMessages(db, user, ids);
+    // 履歴が切れるのは長く同期できなかった後（ログインの期限切れなど）。最後に取り込んだメール以降を
+    // 過去メールの取り込みとして拾い直す（2日より前の分を取りこぼさない。下書き・通知は出さない）
+    const gap = await daysSinceLastMessage(db, user);
+    if (gap > 2) {
+      const recent = new Set(ids);
+      const older = await mail.listMessageIds(`newer_than:${gap}d -in:drafts`, BACKFILL_MAX);
+      n += await enqueueMessages(db, user, older.filter((id) => !recent.has(id)), true);
+    }
     const profile = await mail.getProfile();
     await db.update(users).set({ historyId: profile.historyId }).where(eq(users.id, user.id));
     return n;
   }
+}
+
+/** 最後に取り込んだメールから今日までの日数（1日の余裕を足し、最大 30 日）。メールが無ければ 0 */
+async function daysSinceLastMessage(db: Db, user: User, now = new Date()): Promise<number> {
+  const [row] = await db
+    .select({ at: max(messages.receivedAt) })
+    .from(messages)
+    .where(eq(messages.userId, user.id));
+  if (!row?.at) return 0;
+  const days = Math.ceil((now.getTime() - new Date(row.at).getTime()) / 86_400_000) + 1;
+  return Math.min(30, Math.max(0, days));
 }
 
 /** 取り込みの上限。受信トレイの 90 日分（約 1 万通）が収まる大きさ */
