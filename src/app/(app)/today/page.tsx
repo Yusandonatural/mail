@@ -54,8 +54,15 @@ export default async function TodayPage() {
     days.set(key, [...(days.get(key) ?? []), e]);
   }
 
+  const daysLeft = (due: string) => {
+    const d = parseDateish(due);
+    if (!d) return "";
+    const n = Math.round((d.getTime() - (parseDateish(today) ?? now).getTime()) / 86_400_000);
+    return n <= 0 ? "今日" : n === 1 ? "明日" : `あと${n}日`;
+  };
+
   return (
-    <>
+    <div className="narrow">
       <div className="topbar">
         <h1>今日・今週の予定</h1>
       </div>
@@ -65,60 +72,74 @@ export default async function TodayPage() {
         </div>
       ) : null}
       {dues.length ? (
-        <div className="panel">
-          <h2>14日以内の支払期日</h2>
-          <table className="simple">
-            <tbody>
-              {dues.map((m) => (
-                <tr key={m.id}>
-                  <td style={{ width: 110 }}>{m.dueDate}</td>
-                  <td>
-                    <Link href={`/m/${m.id}`}>{m.fromName || m.fromEmail}</Link>
-                    <div className="meta">{m.summary}</div>
-                  </td>
-                  <td className="amount">{formatAmount(m.amount, m.currency)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <section className="panel" aria-labelledby="dues-head">
+          <h2 id="dues-head">
+            14日以内の支払期日
+            <span className="meta">{dues.length}件</span>
+          </h2>
+          <ul className="day-list">
+            {dues.map((m) => {
+              const left = m.dueDate ? daysLeft(m.dueDate) : "";
+              return (
+                <li key={m.id} className="day-item">
+                  <span className="day-time">
+                    {m.dueDate ? formatJst(parseDateish(m.dueDate) ?? now, false) : ""}
+                    {left ? <span className={left === "今日" || left === "明日" ? "due-left soon" : "due-left"}>{left}</span> : null}
+                  </span>
+                  <span className="day-main">
+                    <Link href={`/m/${m.id}`} className="day-title">
+                      {m.fromName || m.fromEmail}
+                    </Link>
+                    {m.summary ? <span className="meta">{m.summary}</span> : null}
+                  </span>
+                  <span className="amount">{formatAmount(m.amount, m.currency)}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       ) : null}
       {[...days.entries()].map(([day, list]) => (
-        <div key={day} className="panel">
+        <section key={day} className={day === today ? "panel is-today" : "panel"} aria-label={formatJst(parseDateish(day) ?? now, false)}>
           <h2>
-            {formatJst(parseDateish(day) ?? now, false)}
-            {day === today ? <span className="badge reply">今日</span> : null}
+            <span className="day-head">
+              {formatJst(parseDateish(day) ?? now, false)}
+              {day === today ? <span className="badge date">今日</span> : null}
+            </span>
+            <span className="meta">{list.length}件</span>
           </h2>
-          <table className="simple">
-            <tbody>
-              {list.map((e) => {
-                const m = byEvent.get(e.id);
-                return (
-                  <tr key={e.id}>
-                    <td style={{ width: 90 }}>{e.allDay ? "終日" : formatJst(new Date(e.start)).split(" ")[1]}</td>
-                    <td>
+          <ul className="day-list">
+            {list.map((e) => {
+              const m = byEvent.get(e.id);
+              const tentative = e.summary.startsWith(TENTATIVE_PREFIX);
+              const title = tentative ? e.summary.slice(TENTATIVE_PREFIX.length) : e.summary;
+              return (
+                <li key={e.id} className="day-item">
+                  <span className="day-time">{e.allDay ? "終日" : formatJst(new Date(e.start)).split(" ")[1]}</span>
+                  <span className="day-main">
+                    <span className="day-title-row">
                       {e.htmlLink ? (
-                        <a href={e.htmlLink} target="_blank" rel="noreferrer">
-                          {e.summary}
+                        <a href={e.htmlLink} target="_blank" rel="noreferrer" className="day-title">
+                          {title}
                         </a>
                       ) : (
-                        e.summary
+                        <span className="day-title">{title}</span>
                       )}
-                      {e.summary.startsWith(TENTATIVE_PREFIX) ? <span className="badge reply">仮</span> : null}
-                      {m ? (
-                        <div className="meta">
-                          元メール：<Link href={`/m/${m.id}`}>{m.subject}</Link>
-                        </div>
-                      ) : null}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                      {tentative ? <span className="badge review">仮</span> : null}
+                    </span>
+                    {m ? (
+                      <span className="meta">
+                        元メール：<Link href={`/m/${m.id}`}>{m.subject || "(件名なし)"}</Link>
+                      </span>
+                    ) : null}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       ))}
       {!error && !events.length ? <div className="panel empty">今週の予定はありません</div> : null}
-    </>
+    </div>
   );
 }

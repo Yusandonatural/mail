@@ -42,6 +42,22 @@ import { pushConfigured } from "@/lib/notify";
 
 const WEEK = ["日", "月", "火", "水", "木", "金", "土"];
 
+/** ページ上部の目次（長い設定ページを行き来しやすく） */
+const JUMPS: Array<[string, string]> = [
+  ["users", "利用者"],
+  ["addresses", "アドレス"],
+  ["rules", "送信者ルール"],
+  ["auto-draft", "自動下書き"],
+  ["signatures", "署名"],
+  ["calendar", "カレンダー"],
+  ["freee", "freee"],
+  ["notify", "通知"],
+  ["playbooks", "書き方"],
+  ["claude", "Claude"],
+  ["backfill", "取り込み"],
+  ["audit", "記録"],
+];
+
 function FolderSelect({ name, value, withBlock, id, label }: { name: string; value?: string; withBlock?: boolean; id?: string; label?: string }) {
   return (
     <select name={name} defaultValue={value} id={id} aria-label={label}>
@@ -94,13 +110,20 @@ export default async function SettingsPage({
   const playbookMap = new Map(playbookRows.map((p) => [p.category, p.guidance]));
 
   return (
-    <>
+    <div className="settings">
       <div className="topbar">
         <h1>設定</h1>
       </div>
+      <nav className="jump-nav" aria-label="設定の項目">
+        {JUMPS.map(([id, label]) => (
+          <a key={id} href={`#${id}`}>
+            {label}
+          </a>
+        ))}
+      </nav>
 
-      <div className="panel">
-        <h2>利用者</h2>
+      <section className="panel" aria-labelledby="users">
+        <h2 id="users">利用者</h2>
         <p className="meta">ここに追加した人だけがログインできます。管理者は全フォルダと設定、担当者は選んだフォルダだけを見られます。</p>
         <table className="simple rtable">
           <thead>
@@ -129,7 +152,7 @@ export default async function SettingsPage({
                         <option value="off">無効</option>
                       </select>
                     </div>
-                    <div>
+                    <div className="checks">
                       {FOLDER_KEYS.map((f) => (
                         <label key={f} className="inline">
                           <input type="checkbox" name="visibleFolders" value={f} defaultChecked={u.visibleFolders.includes(f)} />
@@ -165,19 +188,21 @@ export default async function SettingsPage({
           </div>
           <fieldset className="plain">
             <legend>見られるフォルダ（担当者のとき）</legend>
-            {FOLDER_KEYS.map((f) => (
-              <label key={f} className="inline">
-                <input type="checkbox" name="visibleFolders" value={f} defaultChecked={f !== "keiri" && f !== "personal"} />
-                {folderName(f)}
-              </label>
-            ))}
+            <div className="checks">
+              {FOLDER_KEYS.map((f) => (
+                <label key={f} className="inline">
+                  <input type="checkbox" name="visibleFolders" value={f} defaultChecked={f !== "keiri" && f !== "personal"} />
+                  {folderName(f)}
+                </label>
+              ))}
+            </div>
           </fieldset>
           <SubmitButton className="primary">追加</SubmitButton>
         </form>
-      </div>
+      </section>
 
-      <div className="panel">
-        <h2>用途別アドレスとフォルダ</h2>
+      <section className="panel" aria-labelledby="addresses">
+        <h2 id="addresses">用途別アドレスとフォルダ</h2>
         <p className="meta">「内容で決める」は個人・総合窓口のアドレス用です。届いたメールの内容で業務フォルダを決め直します。</p>
         <table className="simple rtable">
           <thead>
@@ -246,10 +271,10 @@ export default async function SettingsPage({
           </div>
           <SubmitButton className="primary">追加</SubmitButton>
         </form>
-      </div>
+      </section>
 
-      <div className="panel">
-        <h2>送信者ルール</h2>
+      <section className="panel" aria-labelledby="rules">
+        <h2 id="rules">送信者ルール</h2>
         <p className="meta">宛先より優先します。メール画面で「今後も」を選んで移動すると、ここに自動で追加されます。「迷惑メール（自動）」にした送信者のメールは、届いた時点で迷惑メールへ移します（削除すると元に戻ります）。</p>
         <table className="simple">
           <tbody>
@@ -291,12 +316,12 @@ export default async function SettingsPage({
           </div>
           <SubmitButton className="primary">追加</SubmitButton>
         </form>
-      </div>
+      </section>
 
-      <div className="panel">
-        <h2>自動で返信下書きを作るフォルダ</h2>
+      <section className="panel" aria-labelledby="auto-draft">
+        <h2 id="auto-draft">自動で返信下書きを作るフォルダ</h2>
         <form action={saveAutoDraftAction} className="stack">
-          <div>
+          <div className="checks">
             {FOLDER_KEYS.map((f) => (
               <label key={f} className="inline">
                 <input type="checkbox" name={f} defaultChecked={autoDraft[f]} />
@@ -306,10 +331,10 @@ export default async function SettingsPage({
           </div>
           <SubmitButton>保存</SubmitButton>
         </form>
-      </div>
+      </section>
 
-      <div className="panel">
-        <h2>署名</h2>
+      <section className="panel" aria-labelledby="signatures">
+        <h2 id="signatures">署名</h2>
         <form action={saveSignaturesAction} className="stack">
           <div className="grid2">
             <div>
@@ -341,10 +366,10 @@ export default async function SettingsPage({
           </details>
           <SubmitButton>保存</SubmitButton>
         </form>
-      </div>
+      </section>
 
-      <div className="panel">
-        <h2>カレンダーと営業時間</h2>
+      <section className="panel" aria-labelledby="calendar">
+        <h2 id="calendar">カレンダーと営業時間</h2>
         <form action={saveCalendarMapAction} className="stack">
           <p className="meta">予定の種類ごとに、登録先のカレンダーを選びます。</p>
           <div className="grid2">
@@ -368,7 +393,7 @@ export default async function SettingsPage({
         </form>
         <form action={saveBusinessHoursAction} className="stack" style={{ marginTop: 16 }}>
           <p className="meta">「候補を3つ提案」で使う営業時間です。</p>
-          <div>
+          <div className="checks checks-week">
             {WEEK.map((w, i) => (
               <label key={i} className="inline">
                 <input type="checkbox" name="days" value={i} defaultChecked={hours.days.includes(i)} />
@@ -392,10 +417,10 @@ export default async function SettingsPage({
             <SubmitButton>保存</SubmitButton>
           </div>
         </form>
-      </div>
+      </section>
 
-      <div className="panel">
-        <h2>freee 会計</h2>
+      <section className="panel" aria-labelledby="freee">
+        <h2 id="freee">freee 会計</h2>
         {freeeMessage ? <div className="notes">{freeeMessage}</div> : null}
         {!freeeConfigured() ? (
           <p className="meta">
@@ -430,10 +455,10 @@ export default async function SettingsPage({
             </a>
           </p>
         )}
-      </div>
+      </section>
 
-      <div className="panel">
-        <h2>通知</h2>
+      <section className="panel" aria-labelledby="notify">
+        <h2 id="notify">通知</h2>
         {!pushConfigured() ? (
           <p className="meta">VAPID の鍵を設定すると、スマホやパソコンに通知できます（README を参照）。</p>
         ) : (
@@ -453,10 +478,11 @@ export default async function SettingsPage({
             <SubmitButton>保存</SubmitButton>
           </form>
         )}
-      </div>
+      </section>
 
-      <div className="panel">
-        <h2>下書きの書き方</h2>
+      <section className="panel" aria-labelledby="playbooks">
+        <h2 id="playbooks">下書きの書き方</h2>
+        <div className="disclosures">
         <details>
           <summary>会社情報（全ての下書きで Claude に渡します）</summary>
           <form action={saveBusinessContextAction} className="stack">
@@ -474,9 +500,10 @@ export default async function SettingsPage({
             </form>
           </details>
         ))}
-      </div>
+        </div>
+      </section>
 
-      <div className="panel">
+      <section className="panel" aria-labelledby="claude">
         <h2 id="claude">Claude の接続</h2>
         {claudeFailure ? (
           <div className="banner error">
@@ -507,9 +534,9 @@ export default async function SettingsPage({
             <SubmitButton>Shopify をテストする</SubmitButton>
           </form>
         ) : null}
-      </div>
+      </section>
 
-      <div className="panel">
+      <section className="panel" aria-labelledby="backfill">
         <h2 id="backfill">過去のメールの取り込み</h2>
         {backfillQueued ? <div className="notes">{backfillQueued} 通を取り込みの順番待ちに入れました。新しく届くメールを優先して、5分ごとに少しずつ進みます。</div> : null}
         <p className="meta">あなたの受信箱にある過去のメールを、さかのぼって分類します（下書きは自動では作りません）。</p>
@@ -548,10 +575,10 @@ export default async function SettingsPage({
             </table>
           </details>
         ) : null}
-      </div>
+      </section>
 
-      <div className="panel">
-        <h2>操作の記録</h2>
+      <section className="panel" aria-labelledby="audit">
+        <h2 id="audit">操作の記録</h2>
         <table className="simple">
           <tbody>
             {logs.map(({ log, email }) => (
@@ -571,7 +598,7 @@ export default async function SettingsPage({
             ) : null}
           </tbody>
         </table>
-      </div>
-    </>
+      </section>
+    </div>
   );
 }

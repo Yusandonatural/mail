@@ -20,7 +20,7 @@ import { calendarFor, mailFor } from "@/lib/services";
 import { parseMessage, type ParsedMessage } from "@/lib/mail/parse";
 import { hiddenInThread, safeBack, threadCandidates, threadDrafts } from "@/lib/queries";
 import { defaultEdits, eventsForDays, gmailThreadLink } from "@/lib/calendar-service";
-import { formatJst, jstIso, parseDateish } from "@/lib/time";
+import { formatJst, jstDateString, jstIso, parseDateish } from "@/lib/time";
 import { adoptGmailDrafts, draftText } from "@/lib/drafts";
 import type { CalendarApi, CalendarEvent, CalendarInfo } from "@/lib/google/calendar-api";
 import type { MailApi } from "@/lib/google/mail-api";
@@ -39,6 +39,25 @@ import { uploadKey, uploadsFor } from "@/lib/freee-service";
 import { getSetting } from "@/lib/settings";
 import { archiveAction, markReviewed, moveFolder, saveContactAction } from "@/app/actions/mail";
 import { confirmEventAction, createEventAction, ignoreCandidateAction } from "@/app/actions/calendar";
+
+/** 日程の候補の見出し：11月20日(金) 10:00〜12:00、終日なら 11月21日(土)・終日 */
+function whenLabel(start: string, end: string | null, allDay: boolean): string {
+  const s = parseDateish(start);
+  if (!s) return start;
+  const e = end ? parseDateish(end) : null;
+  if (allDay) {
+    const last = e && end!.slice(0, 10) !== start.slice(0, 10) ? `〜${formatJst(e, false)}` : "";
+    return `${formatJst(s, false)}${last}・終日`;
+  }
+  if (!e) return formatJst(s);
+  return `${formatJst(s)}〜${jstDateString(s) === jstDateString(e) ? formatJst(e).split(" ")[1] : formatJst(e)}`;
+}
+
+const CANDIDATE_STATUS: Record<string, { label: string; className: string }> = {
+  candidate: { label: "候補", className: "badge date" },
+  tentative: { label: "仮予定", className: "badge review" },
+  confirmed: { label: "確定", className: "badge draft" },
+};
 
 function toLocalInput(value: string | null, allDay: boolean): string {
   if (!value) return "";
@@ -251,7 +270,7 @@ export default async function MessagePage({
                 </span>
               </span>
             </div>
-            <div className="badges" style={{ marginBottom: 10 }}>
+            <div className="badges">
               {isFolder(row.folder) ? <span className="badge draft">{folderName(row.folder)}</span> : null}
               {row.secondaryFolders.filter(isFolder).map((f) => (
                 <span key={f} className="badge">
@@ -267,8 +286,13 @@ export default async function MessagePage({
               {row.dueDate ? <span className="badge date">期限 {row.dueDate}</span> : null}
               {row.confidence !== null ? <span className="badge">確度 {Math.round(row.confidence * 100)}%</span> : null}
             </div>
-            <div className="notes">{row.summary}</div>
-            <details style={{ marginTop: 10 }}>
+            {row.summary ? (
+              <div className="summary-box">
+                <span className="summary-label">要約</span>
+                {row.summary}
+              </div>
+            ) : null}
+            <details className="subtle">
               <summary>振り分けを直す</summary>
               <form action={moveFolder} className="stack">
                 <input type="hidden" name="rowId" value={row.id} />
@@ -304,7 +328,12 @@ export default async function MessagePage({
 
           <div className="panel p-thread">
             {loadError ? <p className="empty">本文を読み込めませんでした。下の「Gmail で開く」から読めます。</p> : null}
-            {thread.length > 1 ? <p className="meta thread-note">新しいメールが上です（全{thread.length}通）。古いメールは押すと開きます</p> : null}
+            {thread.length ? (
+              <h2 className="thread-head">
+                やり取り
+                <span className="meta">{thread.length > 1 ? `全${thread.length}通・新しい順` : "1通"}</span>
+              </h2>
+            ) : null}
             {[...thread].reverse().map((m, i) => {
               const ours = m.labelIds.includes("SENT") || m.from?.email === user.email;
               // 一番新しいメールと、このメール自身は開いておく
@@ -312,16 +341,20 @@ export default async function MessagePage({
               return (
                 <details key={m.id} className={ours ? "msg ours" : "msg"} open={open}>
                   <summary className="msg-head">
-                    <span>
-                      <strong>{m.from?.name || m.from?.email}</strong> {m.from?.name ? `<${m.from.email}>` : ""}
-                      {ours ? <span className="badge">送信済み</span> : null}
-                      <br />
+                    <Avatar name={m.from?.name || m.from?.email || "?"} email={m.from?.email ?? ""} />
+                    <span className="msg-from">
+                      <span className="msg-name">
+                        <strong>{m.from?.name || m.from?.email}</strong>
+                        {m.from?.name ? <span className="msg-addr">{m.from.email}</span> : null}
+                        {ours ? <span className="badge">送信済み</span> : null}
+                        <span className="msg-date">{formatJst(m.date)}</span>
+                      </span>
                       <span className="msg-to">宛先：{[...m.to, ...m.cc].map((a) => a.email).join(", ")}</span>
-                      <span className="msg-snippet">{(stripQuoted(m.text) || m.text).replace(/\s+/g, " ").slice(0, 90)}</span>
+                      <span className="msg-snippet">{(stripQuoted(m.text) || m.text).replace(/\s+/g, " ").slice(0, 120)}</span>
                     </span>
-                    <span>{formatJst(m.date)}</span>
                   </summary>
-                  {m.html ? <HtmlFrame html={m.html} showImages={images === "1"} /> : <pre>{m.text}</pre>}
+                  <div className="msg-body">
+                  {m.html ? <HtmlFrame html={m.html} showImages={images === "1"} /> : <pre className="mail-text">{m.text}</pre>}
                   {!isMostlyJapanese(stripQuoted(m.text) || m.text) ? (
                     <Translation rowId={row.id} gmailMessageId={m.id} />
                   ) : null}
@@ -341,15 +374,16 @@ export default async function MessagePage({
                       ))}
                     </div>
                   ) : null}
+                  </div>
                 </details>
               );
             })}
-            {thread.some((m) => m.html) && images !== "1" ? (
-              <p className="meta">
-                外部の画像は表示していません。<Link href={`${self}&images=1`}>画像を表示</Link>
-              </p>
-            ) : null}
-            <p className="meta">
+            <p className="meta thread-foot">
+              {thread.some((m) => m.html) && images !== "1" ? (
+                <span>
+                  外部の画像は表示していません。<Link href={`${self}&images=1`}>画像を表示</Link>
+                </span>
+              ) : null}
               <a href={gmailThreadLink(user.email, row.gmailThreadId)} target="_blank" rel="noreferrer">
                 Gmail で開く
               </a>
@@ -383,107 +417,117 @@ export default async function MessagePage({
           </div>
 
           {candidates.length ? (
-            <div className="panel">
-              <h2>日程</h2>
+            <section className="panel" aria-labelledby="dates-head">
+              <h2 id="dates-head">
+                日程
+                <span className="meta">{candidates.length}件</span>
+              </h2>
               {candidates.map((c, i) => {
                 const e = edits[i];
                 const day = c.start.slice(0, 10);
                 const agenda = agendas.get(day);
+                const status = CANDIDATE_STATUS[c.status] ?? CANDIDATE_STATUS.candidate;
+                const calName =
+                  e.calendarId === "primary" ? "メイン" : (calendars.find((cal) => cal.id === e.calendarId)?.summary ?? "メイン");
                 return (
-                  <div key={c.id} className="cand">
-                    <div className="actions" style={{ justifyContent: "space-between" }}>
-                      <strong>{DATE_KIND_LABELS[c.kind as DateKind] ?? c.kind}</strong>
-                      <span className="badge">
-                        {c.status === "candidate" ? "候補" : c.status === "tentative" ? "仮予定" : "確定"}
-                      </span>
+                  <div key={c.id} className={`cand cand-${c.status}`}>
+                    <div className="cand-head">
+                      <div className="cand-title">
+                        <span className="cand-kind">{DATE_KIND_LABELS[c.kind as DateKind] ?? c.kind}</span>
+                        <span className="cand-when">{whenLabel(c.start, c.end, c.allDay)}</span>
+                      </div>
+                      <span className={status.className}>{status.label}</span>
                     </div>
+                    {c.status !== "candidate" ? <div className="cand-name">{c.title}</div> : null}
                     {c.note ? <div className="meta">{c.note}</div> : null}
                     {c.status === "candidate" ? (
                       <>
                         {agenda ? (
                           <div className="agenda">
-                            {day} の予定：
-                            {agenda.length
-                              ? agenda.map((ev) => `${ev.allDay ? "終日" : formatJst(new Date(ev.start)).split(" ")[1]} ${ev.summary}`).join("、")
-                              : "なし"}
+                            <div className="agenda-title">{formatJst(parseDateish(day) ?? new Date(), false)} の予定</div>
+                            {agenda.length ? (
+                              <ul>
+                                {agenda.map((ev) => (
+                                  <li key={ev.id}>
+                                    <span className="agenda-time">{ev.allDay ? "終日" : formatJst(new Date(ev.start)).split(" ")[1]}</span>
+                                    <span>{ev.summary}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <div className="agenda-empty">予定はありません</div>
+                            )}
                           </div>
                         ) : null}
-                        <form action={createEventAction} className="stack">
+                        <form action={createEventAction} className="stack cand-form">
                           <input type="hidden" name="candidateId" value={c.id} />
                           <input type="hidden" name="back" value={self} />
-                          <div>
-                            <label htmlFor={`title-${c.id}`}>タイトル</label>
-                            <input id={`title-${c.id}`} name="title" defaultValue={e.title} />
-                          </div>
-                          <div className="stack">
-                            <div>
-                              <label htmlFor={`start-${c.id}`}>開始</label>
-                              <input
-                                id={`start-${c.id}`}
-                                name="start"
-                                type={c.allDay ? "date" : "datetime-local"}
-                                defaultValue={toLocalInput(c.start, c.allDay)}
-                              />
+                          <details className="cand-edit">
+                            <summary>タイトル・日時を変える</summary>
+                            <div className="stack">
+                              <div>
+                                <label htmlFor={`title-${c.id}`}>タイトル</label>
+                                <input id={`title-${c.id}`} name="title" defaultValue={e.title} />
+                              </div>
+                              <div>
+                                <label htmlFor={`start-${c.id}`}>開始</label>
+                                <input
+                                  id={`start-${c.id}`}
+                                  name="start"
+                                  type={c.allDay ? "date" : "datetime-local"}
+                                  defaultValue={toLocalInput(c.start, c.allDay)}
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`end-${c.id}`}>終了（空なら1時間）</label>
+                                <input
+                                  id={`end-${c.id}`}
+                                  name="end"
+                                  type={c.allDay ? "date" : "datetime-local"}
+                                  defaultValue={toLocalInput(c.end, c.allDay)}
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`cal-${c.id}`}>カレンダー</label>
+                                <select id={`cal-${c.id}`} name="calendarId" defaultValue={e.calendarId}>
+                                  <option value="primary">メイン</option>
+                                  {calendars
+                                    .filter((cal) => !cal.primary)
+                                    .map((cal) => (
+                                      <option key={cal.id} value={cal.id}>
+                                        {cal.summary}
+                                      </option>
+                                    ))}
+                                </select>
+                              </div>
+                              <label className="inline">
+                                <input type="checkbox" name="allDay" defaultChecked={c.allDay} /> 終日
+                              </label>
                             </div>
-                            <div>
-                              <label htmlFor={`end-${c.id}`}>終了（空なら1時間）</label>
-                              <input
-                                id={`end-${c.id}`}
-                                name="end"
-                                type={c.allDay ? "date" : "datetime-local"}
-                                defaultValue={toLocalInput(c.end, c.allDay)}
-                              />
-                            </div>
-                          </div>
-                          <div>
-                            <label htmlFor={`cal-${c.id}`}>カレンダー</label>
-                            <select id={`cal-${c.id}`} name="calendarId" defaultValue={e.calendarId}>
-                              <option value="primary">メイン</option>
-                              {calendars
-                                .filter((cal) => !cal.primary)
-                                .map((cal) => (
-                                  <option key={cal.id} value={cal.id}>
-                                    {cal.summary}
-                                  </option>
-                                ))}
-                            </select>
-                          </div>
-                          <div>
-                            <label className="inline">
-                              <input type="checkbox" name="allDay" defaultChecked={c.allDay} /> 終日
-                            </label>
-                            <label className="inline">
-                              <input type="checkbox" name="tentative" defaultChecked={e.tentative} /> 仮予定にする
-                            </label>
-                          </div>
-                          <div className="actions">
+                          </details>
+                          <label className="inline">
+                            <input type="checkbox" name="tentative" defaultChecked={e.tentative} /> 仮予定にする
+                          </label>
+                          <div className="cand-actions">
                             <SubmitButton className="primary">予定を作る</SubmitButton>
+                            <span className="meta cand-cal">{calName}に入れます</span>
+                            <button type="submit" formAction={ignoreCandidateAction} className="link-button cand-ignore">
+                              使わない
+                            </button>
                           </div>
-                        </form>
-                        <form action={ignoreCandidateAction} className="cand-foot">
-                          <input type="hidden" name="candidateId" value={c.id} />
-                          <input type="hidden" name="back" value={self} />
-                          <SubmitButton className="link-button">この候補は使わない</SubmitButton>
                         </form>
                       </>
-                    ) : (
-                      <div className="stack">
-                        <div>
-                          {c.title}（{c.allDay ? c.start.slice(0, 10) : formatJst(parseDateish(c.start) ?? new Date())}）
-                        </div>
-                        {c.status === "tentative" ? (
-                          <form action={confirmEventAction}>
-                            <input type="hidden" name="candidateId" value={c.id} />
-                            <input type="hidden" name="back" value={self} />
-                            <SubmitButton className={row.suggestConfirm ? "primary" : undefined}>確定にする</SubmitButton>
-                          </form>
-                        ) : null}
-                      </div>
-                    )}
+                    ) : c.status === "tentative" ? (
+                      <form action={confirmEventAction} className="cand-actions">
+                        <input type="hidden" name="candidateId" value={c.id} />
+                        <input type="hidden" name="back" value={self} />
+                        <SubmitButton className={row.suggestConfirm ? "primary" : undefined}>確定にする</SubmitButton>
+                      </form>
+                    ) : null}
                   </div>
                 );
               })}
-            </div>
+            </section>
           ) : null}
 
           {showFreee ? (
@@ -498,20 +542,31 @@ export default async function MessagePage({
             />
           ) : null}
 
-          <div className="panel">
-            <h2>連絡先</h2>
-            <div className="meta">
-              {row.fromName ? `${row.fromName} ` : ""}&lt;{row.fromEmail}&gt;
+          <section className="panel contact" aria-labelledby="contact-head">
+            <h2 id="contact-head">連絡先</h2>
+            <div className="sender contact-who">
+              <Avatar name={row.fromName || row.fromEmail} email={row.fromEmail} />
+              <span className="sender-text">
+                <strong>{row.fromName || row.fromEmail}</strong>
+                <span className="meta">
+                  {[contact?.organization, row.fromName ? row.fromEmail : null].filter(Boolean).join("・")}
+                </span>
+              </span>
             </div>
             {/* 夜間の要約は、ほかの人の受信箱（見られないフォルダを含む）のメールから作られるので管理者にだけ出す */}
-            {contact?.lastSummary && isAdmin(user) ? <div className="notes" style={{ marginTop: 8 }}>{contact.lastSummary}</div> : null}
+            {contact?.lastSummary && isAdmin(user) ? (
+              <div className="summary-box">
+                <span className="summary-label">これまでのやり取り</span>
+                {contact.lastSummary}
+              </div>
+            ) : null}
             {senderRules.length ? (
-              <div className="meta" style={{ marginTop: 8 }}>
-                適用中の振り分けルール：
+              <div className="meta">
+                振り分けルール：
                 {senderRules.map((r) => `${r.kind === "sender" ? r.pattern : `@${r.pattern}`} → ${ruleTargetName(r.folder)}`).join("、")}
               </div>
             ) : null}
-            <form action={saveContactAction} className="stack" style={{ marginTop: 8 }}>
+            <form action={saveContactAction} className="stack">
               <input type="hidden" name="email" value={row.fromEmail} />
               <input type="hidden" name="back" value={self} />
               <div className="grid2">
@@ -530,7 +585,7 @@ export default async function MessagePage({
               </div>
               <SubmitButton>メモを保存</SubmitButton>
             </form>
-          </div>
+          </section>
         </div>
       </div>
     </>

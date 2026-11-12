@@ -1,14 +1,27 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { findPlaceholders } from "@/lib/placeholders";
+import { findPlaceholders, type Placeholder } from "@/lib/placeholders";
 import { translateReplyAction } from "@/app/actions/translate";
 import { LANGUAGE_LABELS, LANGUAGES } from "@/lib/domain";
 import { emptyReplyAction, generateDraftAction, markSentAction, prepareSendAction, saveDraftAction } from "@/app/actions/mail";
 import { SendButton, withSentNotice } from "./send-button";
 
 const PRESETS = ["もっと短く", "もっと丁寧に", "英語で", "日本語で"];
+
+/** Claude のメモから「確認した情報: …」の行を分けて、調べた先を一つずつ見せる */
+function splitNotes(notes: string): { body: string; sources: string[] } {
+  const lines = notes.replace(/\r\n/g, "\n").split("\n");
+  const sources: string[] = [];
+  const rest: string[] = [];
+  for (const line of lines) {
+    const m = line.match(/^\s*確認した情報\s*[:：]\s*(.*)$/);
+    if (m) sources.push(...m[1].split(/[、,]\s*/).map((s) => s.trim()).filter(Boolean));
+    else rest.push(line);
+  }
+  return { body: rest.join("\n").trim(), sources };
+}
 
 export interface DraftView {
   id: number;
@@ -45,7 +58,30 @@ export function DraftEditor({
   const [status, setStatus] = useState<{ text: string; error?: boolean } | null>(null);
   const [pending, start] = useTransition();
   const placeholders = useMemo(() => findPlaceholders(text), [text]);
+  const notes = useMemo(() => splitNotes(draft.notes), [draft.notes]);
+  const textRef = useRef<HTMLTextAreaElement>(null);
   const dirty = text !== draft.text;
+
+  /** 本文の【要確認】を選んだ状態にする（そのまま打てば置き換わる） */
+  const select = (p: Placeholder) => {
+    const ta = textRef.current;
+    if (!ta) return;
+    ta.focus({ preventScroll: true });
+    // 選んだ場所がテキスト欄の中ほどに来るよう、手前までの高さを測ってスクロールする
+    const full = ta.value;
+    ta.value = full.slice(0, p.index);
+    const height = ta.scrollHeight;
+    ta.value = full;
+    ta.scrollTop = Math.max(0, height - ta.clientHeight / 2);
+    ta.setSelectionRange(p.index, p.index + p.raw.length);
+    ta.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+  /** カーソルの後ろにある次の【要確認】（最後まで行ったら最初に戻る） */
+  const selectNext = () => {
+    const at = textRef.current?.selectionEnd ?? 0;
+    const next = placeholders.find((p) => p.index >= at) ?? placeholders[0];
+    if (next) select(next);
+  };
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>, okMessage: string) =>
     start(async () => {
@@ -64,22 +100,50 @@ export function DraftEditor({
           {draft.instruction ? `・指示「${draft.instruction}」` : ""}
         </span>
       </h2>
-      {draft.notes ? <div className="notes">{draft.notes}</div> : null}
+      {notes.body || notes.sources.length ? (
+        <div className="draft-notes">
+          {notes.body ? <p className="draft-notes-text">{notes.body}</p> : null}
+          {notes.sources.length ? (
+            <div className="draft-sources">
+              <span className="draft-sources-label">確認した情報</span>
+              <ul>
+                {notes.sources.map((src, i) => (
+                  <li key={i}>{src}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {placeholders.length ? (
+        <div className="ph-box" role="group" aria-labelledby={`ph-${draft.id}`}>
+          <div className="ph-head">
+            <strong id={`ph-${draft.id}`}>【要確認】あと{placeholders.length}か所</strong>
+            <span className="meta">押すと本文のその場所を選びます</span>
+          </div>
+          <ol className="ph-list">
+            {placeholders.map((p, i) => (
+              <li key={`${p.index}-${i}`}>
+                <button type="button" className="ph-item" onClick={() => select(p)}>
+                  <span className="ph-num" aria-hidden="true">
+                    {i + 1}
+                  </span>
+                  <span className="ph-label">{p.label || "（説明なし）"}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
       <textarea
+        ref={textRef}
         data-draft
-        className="draft-text"
+        className={placeholders.length ? "draft-text has-ph" : "draft-text"}
         aria-labelledby={`draft-${draft.id}`}
         rows={16}
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
-      {placeholders.length ? (
-        <div className="placeholder-list">
-          【要確認】が{placeholders.length}か所あります（{placeholders.map((p) => p.label || "無題").join("、")}）。埋めると送信できます
-        </div>
-      ) : (
-        <div className="check-ok">✓ 【要確認】はありません</div>
-      )}
       <div className="send-row">
         <SendButton
           clientId={clientId}
@@ -93,18 +157,24 @@ export function DraftEditor({
             router.refresh();
           }}
         />
+        {placeholders.length ? (
+          <button type="button" className="ph-next" onClick={selectNext}>
+            【要確認】へ<span className="ph-count">{placeholders.length}</span>
+          </button>
+        ) : (
+          <span className="check-ok">✓ 埋める箇所なし</span>
+        )}
         <span className="spacer" />
         <button type="button" disabled={!dirty || pending} onClick={() => run(() => saveDraftAction(draft.id, text), "保存しました")}>
           {dirty ? "保存" : "保存済み"}
         </button>
-        <a
-          className="button"
-          target="_blank"
-          rel="noreferrer"
-          href={`https://mail.google.com/mail/?authuser=${encodeURIComponent(userEmail)}#drafts?compose=${draft.gmailMessageId}`}
-        >
-          Gmail で開く
-        </a>
+      </div>
+      <div role="status" aria-live="polite" className="draft-status">
+        {pending ? (
+          <div className="status busy">処理中…（Claude は数十秒かかることがあります）</div>
+        ) : status ? (
+          <div className={status.error ? "status error" : "status done"}>{status.text}</div>
+        ) : null}
       </div>
       <details className="tool" open={beforeTranslate !== null}>
         <summary>翻訳する</summary>
@@ -163,7 +233,7 @@ export function DraftEditor({
         </div>
       </details>
       <details className="tool">
-        <summary>Claude に書き直してもらう</summary>
+        <summary>Claude で書き直す</summary>
         <div className="stack">
           <div className="actions">
             {PRESETS.map((p) => (
@@ -213,9 +283,16 @@ export function DraftEditor({
           {dirty ? <div className="meta">手で直した本文は消えません。書き直しは別案として増えます。</div> : null}
         </div>
       </details>
-      <div role="status" aria-live="polite">
-        {pending ? <div className="status busy">処理中…（Claude は数十秒かかることがあります）</div> : status ? <div className={status.error ? "placeholder-list" : "status"}>{status.text}</div> : null}
-      </div>
+      <p className="meta draft-foot">
+        <a
+          target="_blank"
+          rel="noreferrer"
+          href={`https://mail.google.com/mail/?authuser=${encodeURIComponent(userEmail)}#drafts?compose=${draft.gmailMessageId}`}
+        >
+          Gmail で開く
+        </a>
+        （添付を足すときなど）
+      </p>
     </section>
   );
 }

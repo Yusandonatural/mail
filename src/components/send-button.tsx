@@ -177,15 +177,25 @@ export function SendButton({
     token.catch(() => undefined);
   }
 
+  const state = sent ? "sent" : busy ? "busy" : confirming ? "confirming" : "idle";
   return (
-    <span className="actions">
+    <span className="actions send-actions" data-state={state}>
       {sent ? (
         <span className="sent-ok" role="status">
-          ✓ 送信しました
+          <span className="sent-mark" aria-hidden="true">
+            ✓
+          </span>
+          送信しました
         </span>
       ) : (
-        <button type="button" className={confirming ? "primary send confirming" : "primary send"} disabled={disabled || busy} onClick={onClick}>
-          {busy ? "送信中…" : confirming ? "もう一度押すと送信します" : label}
+        <button
+          type="button"
+          className={`primary send${confirming ? " confirming" : ""}${busy ? " busy" : ""}`}
+          disabled={disabled || busy}
+          aria-busy={busy || undefined}
+          onClick={onClick}
+        >
+          {busy ? "送信中…" : confirming ? "もう一度押して送信" : label}
         </button>
       )}
       {confirming && !sent ? (
@@ -194,7 +204,7 @@ export function SendButton({
         </button>
       ) : null}
       {error ? (
-        <span className="placeholder-list send-error" role="alert">
+        <span className="send-error" role="alert">
           {error}
         </span>
       ) : null}
