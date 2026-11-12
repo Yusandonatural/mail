@@ -92,7 +92,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <div className="banner error" role="alert">
             <strong>Claude で分類できていません。</strong>
             <span>
-              {claudeFailure}。直るまでのメールは「個人・要確認」に入ります。
+              {claudeFailure}。直るまでのメールは「要確認」の印を付けて、宛先のフォルダに入れます。直ったら設定の「分類し直す」で振り分け直せます。
               {user.role === "admin" ? (
                 <>
                   {" "}
