@@ -13,7 +13,7 @@ import { processMessage } from "./pipeline";
 import { generateDraft } from "./drafts";
 import { collectSummaries } from "./contacts";
 import { PermanentJobError, type JobHandlers } from "./jobs";
-import { orderLookupFromEnv } from "./shopify";
+import { shopFromEnv } from "./shopify";
 import { notifyUser, pushConfigured, WebPushNotifier, type PushPayload } from "./notify";
 
 const classifier = new ClaudeClassifier();
@@ -30,7 +30,7 @@ export function calendarFor(user: User): CalendarApi {
 }
 
 export function draftDeps(db: Db, user: User) {
-  return { db, mail: mailFor(user), drafter, calendar: calendarFor(user), orders: orderLookupFromEnv() };
+  return { db, mail: mailFor(user), drafter, calendar: calendarFor(user), shop: shopFromEnv() };
 }
 
 export function pipelineDeps(db: Db, user: User) {

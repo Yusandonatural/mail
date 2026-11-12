@@ -11,10 +11,11 @@ import { FakeMail, gmailMessage } from "./helpers/fake-mail";
 
 class FakeDrafter implements DraftWriter {
   requests: DraftRequest[] = [];
+  lookups: string[] = [];
   constructor(private body = "Hi Ben,\nPrice is 【要確認：kg単価】.\n\n─ Ryotaro") {}
   async write(req: DraftRequest) {
     this.requests.push(req);
-    return { notes: "卸の新規問合せ。単価を埋めてください。", body: `${this.body} v${this.requests.length}` };
+    return { notes: "卸の新規問合せ。単価を埋めてください。", body: `${this.body} v${this.requests.length}`, lookups: this.lookups };
   }
 }
 
@@ -61,7 +62,7 @@ async function setup(category = "wholesale", language = "en") {
     receivedAt: new Date(),
   });
   const drafter = new FakeDrafter();
-  const deps = { db, mail, drafter, calendar: freeCalendar, orders: null };
+  const deps = { db, mail, drafter, calendar: freeCalendar, shop: null };
   return { db, user, mail, drafter, deps };
 }
 
@@ -116,11 +117,18 @@ describe("返信下書きの生成", () => {
     expect(drafter.requests[1].previousDraft).toContain("人が書き直した本文");
   });
 
-  it("茶ツアーはカレンダーの空きを候補として渡す", async () => {
-    const { user, drafter, deps } = await setup("tour", "ja");
-    await generateDraft(deps, user, "t1", "m1", { generatedBy: "auto" });
-    expect(drafter.requests[0].slots).toHaveLength(3);
-    expect(drafter.requests[0].signature).toContain("株式会社悠三堂");
+  it("カレンダー・Shopify の調べものを渡し、調べたことをメモに残す", async () => {
+    const { db, user, drafter, deps } = await setup("tour", "ja");
+    drafter.lookups = ["カレンダー 2026-11-20〜2026-11-20"];
+    const shop = { searchProducts: async () => "", findOrders: async () => "", policies: async () => "" };
+    await generateDraft({ ...deps, shop }, user, "t1", "m1", { generatedBy: "auto" });
+    const req = drafter.requests[0];
+    expect(req.tools.calendar).not.toBeNull();
+    expect(req.tools.shop).toBe(shop);
+    expect(req.senderEmail).toBe("ben@adventcha.example");
+    expect(req.signature).toContain("株式会社悠三堂");
+    const [d] = await db.select().from(drafts);
+    expect(d.notes).toContain("確認した情報: カレンダー 2026-11-20〜2026-11-20");
   });
 
   it("画面で編集した本文を、宛先と件名を保ったまま保存する", async () => {

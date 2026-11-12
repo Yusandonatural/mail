@@ -32,7 +32,9 @@ import {
   saveNotifyAction,
   reclassifyAction,
   testClaudeAction,
+  testShopifyAction,
 } from "@/app/actions/settings";
+import { shopFromEnv } from "@/lib/shopify";
 import { countUnclassified } from "@/lib/sync";
 import { disconnectFreeeAction, selectFreeeCompanyAction } from "@/app/actions/freee";
 import { freeeConfigured } from "@/lib/freee";
@@ -56,9 +58,9 @@ function FolderSelect({ name, value, withBlock }: { name: string; value?: string
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ freee?: string; backfill?: string; claude?: string }>;
+  searchParams: Promise<{ freee?: string; backfill?: string; claude?: string; shopify?: string }>;
 }) {
-  const { freee: freeeMessage, backfill: backfillQueued, claude: claudeTest } = await searchParams;
+  const { freee: freeeMessage, backfill: backfillQueued, claude: claudeTest, shopify: shopifyTest } = await searchParams;
   const admin = await requireAdmin();
   const db = await getDb();
   const claudeHealth = await getSetting(db, "claudeHealth");
@@ -473,6 +475,21 @@ export default async function SettingsPage({
         <form action={testClaudeAction}>
           <SubmitButton>接続をテストする</SubmitButton>
         </form>
+        <h3 style={{ marginTop: 18 }}>返信下書きの調べもの</h3>
+        <p className="meta">
+          下書きを書く Claude は、必要に応じて次を調べてから書きます。Google カレンダー（予定・空き）：つながっています。Shopify（商品・価格・在庫・注文・規約）：
+          {shopFromEnv() ? "設定済み" : "未設定（SHOPIFY_STORE_DOMAIN と SHOPIFY_ADMIN_TOKEN を Secret Manager に入れると使えます）"}
+        </p>
+        {shopifyTest ? (
+          <div className={shopifyTest.startsWith("ok:") ? "notes" : "banner error"}>
+            {shopifyTest.startsWith("ok:") ? `Shopify から読めました：${shopifyTest.slice(3)}` : `Shopify から読めませんでした：${shopifyTest.slice(3)}`}
+          </div>
+        ) : null}
+        {shopFromEnv() ? (
+          <form action={testShopifyAction}>
+            <SubmitButton>Shopify をテストする</SubmitButton>
+          </form>
+        ) : null}
       </div>
 
       <div className="panel">

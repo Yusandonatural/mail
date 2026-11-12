@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { ClaudeClassifier } from "@/lib/claude/classifier";
 import { describeClaudeError } from "@/lib/claude/client";
 import { recordClaudeResult } from "@/lib/settings";
+import { shopFromEnv } from "@/lib/shopify";
 import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
@@ -225,4 +226,21 @@ export async function testClaudeAction(): Promise<void> {
   await recordClaudeResult(db, error);
   done();
   redirect(`/settings?claude=${error ? "ng" : "ok"}#claude`);
+}
+
+/** Shopify から商品を1回探して、トークンと権限が使えるかを確かめる */
+export async function testShopifyAction(): Promise<void> {
+  await requireAdmin();
+  const shop = shopFromEnv();
+  let result: string;
+  if (!shop) result = "ng:SHOPIFY_STORE_DOMAIN と SHOPIFY_ADMIN_TOKEN が設定されていません";
+  else {
+    try {
+      const out = await shop.searchProducts("茶");
+      result = `ok:${out.split("\n")[0].slice(0, 80)}`;
+    } catch (err) {
+      result = `ng:${err instanceof Error ? err.message.slice(0, 160) : String(err)}`;
+    }
+  }
+  redirect(`/settings?shopify=${encodeURIComponent(result)}#claude`);
 }

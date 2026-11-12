@@ -12,7 +12,7 @@
 | 3章 基本機能 | 受信一覧・閲覧・添付・新規作成・転送・検索・アーカイブ・迷惑メール・ゴミ箱 | `src/app/(app)/` |
 | 4章 振り分け | 宛先アドレスで一次分類、Claude（claude-haiku-4-5）で内容・要返信・緊急度・言語・日程・金額を判定し、合成ルールでフォルダを決めて Gmail ラベルを付ける | `src/lib/classify/`, `src/lib/pipeline.ts` |
 | 4章 学習 | フォルダを直すときに「今後もこの送信者／ドメインは」を選ぶと送信者ルールになる | `src/app/actions/mail.ts` |
-| 5章 下書き | 要返信のメールに Claude（claude-opus-5）が Gmail の下書きを作る。【要確認】が残っている間は送信できない。人が直した下書きは上書きせず別案として並べる | `src/lib/drafts.ts`, `src/lib/claude/drafter.ts` |
+| 5章 下書き | 要返信のメールに Claude（claude-opus-5-5）が、Shopify（商品・在庫・注文・規約）と Google カレンダー（予定・空き）を必要に応じて調べてから Gmail の下書きを作る。調べた内容は下書きのメモに残る。【要確認】が残っている間は送信できない。人が直した下書きは上書きせず別案として並べる | `src/lib/drafts.ts`, `src/lib/claude/drafter.ts` |
 | 6章 カレンダー | 日程候補の表示、仮予定の登録、空き時間から候補3つの提案、支払期日の終日予定、承諾の返信で確定の提案 | `src/lib/calendar-service.ts`, `src/lib/slots.ts` |
 | 8章 画面 | フォルダ・一覧・本文・下書き・日程・連絡先・今日の予定・設定。キーボード操作（j/k/Enter/e/r/u//）。スマホ表示 | `src/app/`, `src/components/` |
 | 11章 権限 | yusando.com の Google アカウントのみ。管理者と担当者（見られるフォルダを指定）。操作の記録 | `src/lib/access.ts`, `src/lib/audit.ts` |
@@ -68,7 +68,7 @@ Google Workspace と Google Cloud の管理者権限が必要です。Google Clo
 ### 任意の連携
 
 - **freee 会計。** freee アプリストアの開発者ページでアプリを作り、コールバック URL を `<公開URL>/api/freee/callback` にします。クライアント ID・シークレットを `FREEE_CLIENT_ID`・`FREEE_CLIENT_SECRET` として Secret Manager に入れて再デプロイし、設定画面の「freee と連携する」を押します。
-- **Shopify。** `SHOPIFY_STORE_DOMAIN`・`SHOPIFY_ADMIN_TOKEN`（注文の読み取り権限だけのカスタムアプリ）を入れると、注文・配送の下書きに注文情報を使います。
+- **Shopify。** `SHOPIFY_STORE_DOMAIN`・`SHOPIFY_ADMIN_TOKEN`（読み取りだけのカスタムアプリ。権限は `read_products`・`read_inventory`・`read_orders`・`read_legal_policies`）を入れると、返信下書きを書く Claude が商品の価格・在庫・ページ、相手の注文、配送・返品の規約を調べてから書きます。設定画面の「Shopify をテストする」で確かめられます。
 - **通知。** 鍵は手順 2 で作られます。各自がメニューの「通知を受け取る」を押した端末に届きます。iPhone は Safari の共有メニューから「ホーム画面に追加」したアプリで押してください。
 
 ## 開発
@@ -98,4 +98,4 @@ npm run db:migrate   # 手元の Postgres に表を作る（DATABASE_URL と ALL
 - **請求書 PDF** は Claude に送りません（11 章）。
 - **freee 連携**は証憑（ファイルボックス）への送信までです。取引の登録や勘定科目の判断はせず、仕訳は経理担当が freee の画面で行います。送るのは人がボタンを押したときだけです。
 - **通知**は既定で「至急の要返信」だけです。設定画面で「要返信すべて」「通知しない」に変えられます。通知には要約だけを出し、本文は出しません。
-- **Claude のモデル**は、下書きが `claude-opus-5`（effort medium、安全上の理由で止まったときはサーバー側で推奨モデルに切り替える `fallbacks: "default"`）、分類と要約が `claude-haiku-4-5` です。環境変数で変えられます。
+- **Claude のモデル**は、下書きと翻訳が `claude-opus-5-5`（下書きは effort high で Shopify・カレンダーのツールを使う。安全上の理由で止まったときはサーバー側で推奨モデルに切り替える `fallbacks: "default"`）、分類と要約が `claude-haiku-4-5` です。環境変数で変えられます。

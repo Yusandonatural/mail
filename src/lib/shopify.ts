@@ -1,9 +1,15 @@
 /**
- * Shopify Admin API（読み取りのみ）。注文・配送カテゴリの下書きに、相手の最近の注文を渡す。
- * SHOPIFY_STORE_DOMAIN と SHOPIFY_ADMIN_TOKEN が無ければ何もしない。
+ * Shopify Admin API（読み取りのみ）。返信下書きを書く Claude が、必要なときに
+ * 商品（価格・在庫・ページ）、相手の注文、ストアの規約（配送・返品）を調べるのに使う。
+ * SHOPIFY_STORE_DOMAIN と SHOPIFY_ADMIN_TOKEN が無ければ使わない。
  */
-export interface OrderLookup {
-  ordersForEmail(email: string): Promise<string | null>;
+export interface ShopInfo {
+  /** キーワードで商品を探す（価格・在庫・バリエーション・ページの URL） */
+  searchProducts(query: string): Promise<string>;
+  /** メールアドレスか注文番号で注文を探す */
+  findOrders(q: { email?: string; orderNumber?: string }): Promise<string>;
+  /** 配送・返品・支払いなどストアの規約 */
+  policies(): Promise<string>;
 }
 
 interface OrderNode {
@@ -16,7 +22,25 @@ interface OrderNode {
   fulfillments: Array<{ status: string; trackingInfo: Array<{ number: string | null; company: string | null }> }>;
 }
 
-const QUERY = `query Orders($q: String!) {
+interface VariantNode {
+  title: string;
+  price: string;
+  sku: string | null;
+  availableForSale: boolean;
+  inventoryQuantity?: number | null;
+}
+
+interface ProductNode {
+  title: string;
+  status: string;
+  productType: string | null;
+  onlineStoreUrl: string | null;
+  totalInventory?: number | null;
+  tracksInventory?: boolean;
+  variants: { nodes: VariantNode[] };
+}
+
+const ORDERS = `query Orders($q: String!) {
   orders(first: 5, query: $q, sortKey: CREATED_AT, reverse: true) {
     nodes {
       name createdAt displayFinancialStatus displayFulfillmentStatus
@@ -26,6 +50,17 @@ const QUERY = `query Orders($q: String!) {
     }
   }
 }`;
+
+const PRODUCTS = (withInventory: boolean) => `query Products($q: String!) {
+  products(first: 8, query: $q, sortKey: RELEVANCE) {
+    nodes {
+      title status productType onlineStoreUrl ${withInventory ? "totalInventory tracksInventory" : ""}
+      variants(first: 10) { nodes { title price sku availableForSale ${withInventory ? "inventoryQuantity" : ""} } }
+    }
+  }
+}`;
+
+const POLICIES = `query { shop { name currencyCode shopPolicies { type title body } } }`;
 
 export function formatOrders(nodes: OrderNode[]): string | null {
   if (!nodes.length) return null;
@@ -49,27 +84,107 @@ export function formatOrders(nodes: OrderNode[]): string | null {
     .join("\n");
 }
 
-export class ShopifyOrderLookup implements OrderLookup {
+export function formatProducts(nodes: ProductNode[]): string | null {
+  if (!nodes.length) return null;
+  return nodes
+    .map((p) => {
+      const stock = (v: VariantNode) => {
+        if (!v.availableForSale) return "販売停止・売り切れ";
+        if (typeof v.inventoryQuantity === "number" && p.tracksInventory !== false) return `在庫 ${v.inventoryQuantity}`;
+        return "販売中";
+      };
+      const variants = p.variants.nodes
+        .map((v) => `  - ${v.title === "Default Title" ? "標準" : v.title}: ${v.price}円${v.sku ? `（SKU ${v.sku}）` : ""} / ${stock(v)}`)
+        .join("\n");
+      return [
+        `${p.title}${p.status !== "ACTIVE" ? `（${p.status === "DRAFT" ? "非公開" : "アーカイブ"}）` : ""}${p.productType ? ` [${p.productType}]` : ""}`,
+        variants,
+        p.onlineStoreUrl ? `  ページ: ${p.onlineStoreUrl}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    })
+    .join("\n");
+}
+
+/** 規約の本文（HTML）を読める長さのテキストにする */
+export function htmlToPlain(html: string, max = 1500): string {
+  const text = html
+    .replace(/<(br|\/p|\/li|\/h\d)\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return text.length > max ? `${text.slice(0, max)}…（以下省略）` : text;
+}
+
+class ShopifyError extends Error {}
+
+export class ShopifyStore implements ShopInfo {
+  private policyCache: { at: number; text: string } | null = null;
+
   constructor(
     private domain: string,
     private token: string,
     private version = process.env.SHOPIFY_API_VERSION || "2026-07",
   ) {}
 
-  async ordersForEmail(email: string): Promise<string | null> {
+  private async gql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
     const res = await fetch(`https://${this.domain}/admin/api/${this.version}/graphql.json`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": this.token },
-      body: JSON.stringify({ query: QUERY, variables: { q: `email:${email}` } }),
+      body: JSON.stringify({ query, variables }),
     });
-    if (!res.ok) throw new Error(`Shopify API ${res.status}`);
-    const json = (await res.json()) as { data?: { orders?: { nodes: OrderNode[] } } };
-    return formatOrders(json.data?.orders?.nodes ?? []);
+    if (!res.ok) throw new ShopifyError(`Shopify API ${res.status}`);
+    const json = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
+    if (json.errors?.length) throw new ShopifyError(json.errors.map((e) => e.message).join(" / "));
+    if (!json.data) throw new ShopifyError("Shopify から空の応答");
+    return json.data;
+  }
+
+  async searchProducts(query: string): Promise<string> {
+    const q = query.trim().slice(0, 100);
+    let nodes: ProductNode[];
+    try {
+      nodes = (await this.gql<{ products: { nodes: ProductNode[] } }>(PRODUCTS(true), { q })).products.nodes;
+    } catch (err) {
+      // 在庫を読む権限（read_inventory）が無いトークンでは、在庫抜きで探し直す
+      if (!(err instanceof ShopifyError) || !/inventory|access/i.test(err.message)) throw err;
+      nodes = (await this.gql<{ products: { nodes: ProductNode[] } }>(PRODUCTS(false), { q })).products.nodes;
+    }
+    return formatProducts(nodes) ?? `「${q}」に当たる商品は見つかりませんでした。`;
+  }
+
+  async findOrders(q: { email?: string; orderNumber?: string }): Promise<string> {
+    const terms: string[] = [];
+    if (q.orderNumber) terms.push(`name:${q.orderNumber.startsWith("#") ? q.orderNumber : `#${q.orderNumber}`}`);
+    if (q.email) terms.push(`email:${q.email}`);
+    if (!terms.length) return "メールアドレスか注文番号を指定してください。";
+    const data = await this.gql<{ orders: { nodes: OrderNode[] } }>(ORDERS, { q: terms.join(" OR ") });
+    return formatOrders(data.orders.nodes) ?? "該当する注文は見つかりませんでした。";
+  }
+
+  async policies(): Promise<string> {
+    if (this.policyCache && Date.now() - this.policyCache.at < 3600_000) return this.policyCache.text;
+    const data = await this.gql<{
+      shop: { name: string; currencyCode: string; shopPolicies: Array<{ type: string; title: string; body: string }> };
+    }>(POLICIES);
+    const text =
+      data.shop.shopPolicies.map((p) => `## ${p.title}\n${htmlToPlain(p.body)}`).join("\n\n") || "ストアの規約は登録されていません。";
+    this.policyCache = { at: Date.now(), text };
+    return text;
   }
 }
 
-export function orderLookupFromEnv(): OrderLookup | null {
+let store: ShopifyStore | null | undefined;
+
+export function shopFromEnv(): ShopInfo | null {
+  if (store !== undefined) return store;
   const domain = process.env.SHOPIFY_STORE_DOMAIN;
   const token = process.env.SHOPIFY_ADMIN_TOKEN;
-  return domain && token ? new ShopifyOrderLookup(domain, token) : null;
+  store = domain && token ? new ShopifyStore(domain, token) : null;
+  return store;
 }

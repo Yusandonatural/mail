@@ -10,9 +10,10 @@ import { buildMime, replySubject } from "./mail/mime";
 import { parseMessage, stripQuoted, type Address, type ParsedMessage } from "./mail/parse";
 import { bodyHash } from "./crypto";
 import { getSetting } from "./settings";
-import { proposeSlots } from "./slots";
-import { formatJst } from "./time";
-import type { OrderLookup } from "./shopify";
+import { freeWindows, proposeSlots } from "./slots";
+import { addDays, formatJst, fromJst, jstParts, startOfJstDay } from "./time";
+import type { ShopInfo } from "./shopify";
+import type { DraftTools } from "./claude/drafter";
 import { PermanentJobError } from "./jobs";
 
 export interface DraftDeps {
@@ -20,7 +21,7 @@ export interface DraftDeps {
   mail: MailApi;
   drafter: DraftWriter;
   calendar: CalendarApi | null;
-  orders: OrderLookup | null;
+  shop: ShopInfo | null;
 }
 
 export interface GenerateOptions {
@@ -36,7 +37,6 @@ export type GenerateResult =
   | { kind: "skipped"; reason: string };
 
 /** 自動で空き時間を添えるカテゴリ（日程調整が多いもの） */
-const SLOT_CATEGORIES = new Set(["tour", "intern"]);
 
 export function draftText(message: ParsedMessage): string {
   return message.text.replace(/\r\n/g, "\n").trim();
@@ -181,22 +181,6 @@ export async function generateDraft(
   const sigSet = (from && signatures.byAddress[from.email]) || {};
   const signature = language === "ja" ? (sigSet.ja ?? signatures.ja) : (sigSet.en ?? signatures.en);
 
-  let slots: string[] = [];
-  if (deps.calendar && (opts.withSlots || (opts.generatedBy === "auto" && category && SLOT_CATEGORIES.has(category)))) {
-    slots = await freeSlotTexts(db, deps.calendar).catch((err) => {
-      console.error("slot lookup failed", err);
-      return [];
-    });
-  }
-
-  let orders: string | null = null;
-  if (deps.orders && category === "order") {
-    orders = await deps.orders.ordersForEmail(target.from.email).catch((err) => {
-      console.error("shopify lookup failed", err);
-      return null;
-    });
-  }
-
   const threadForDraft: ThreadMessageForDraft[] = parsed.slice(-10).map((m) => ({
     from: m.from ? (m.from.name ? `${m.from.name} <${m.from.email}>` : m.from.email) : "不明",
     date: formatJst(m.date),
@@ -215,13 +199,19 @@ export async function generateDraft(
     contactNotes: contact?.notes ?? "",
     contactSummary: contact?.lastSummary ?? "",
     signature,
+    senderEmail: target.from.email,
     thread: threadForDraft,
-    slots,
-    orders,
+    now: formatJst(new Date()),
+    tools: {
+      shop: deps.shop,
+      calendar: deps.calendar ? calendarTools(db, deps.calendar) : null,
+    },
+    wantSlots: Boolean(opts.withSlots),
     instruction: opts.instruction ?? null,
     previousDraft: opts.instruction ? previousText : null,
   });
 
+  const notes = result.lookups?.length ? `${result.notes}\n確認した情報: ${result.lookups.join("、")}` : result.notes;
   const replyTo = target.replyTo ?? target.from;
   const raw = buildMime({
     from,
@@ -241,7 +231,7 @@ export async function generateDraft(
       .set({
         version: livePrevious.version + 1,
         bodyHash: bodyHash(result.body),
-        notes: result.notes,
+        notes,
         instruction: opts.instruction ?? null,
         generatedBy: opts.generatedBy,
       })
@@ -260,7 +250,7 @@ export async function generateDraft(
         gmailDraftId: ref.draftId,
         version: livePrevious ? livePrevious.version + 1 : 1,
         bodyHash: bodyHash(result.body),
-        notes: result.notes,
+        notes,
         instruction: opts.instruction ?? null,
         generatedBy: opts.generatedBy,
       })
@@ -279,14 +269,77 @@ export async function generateDraft(
   return outcome;
 }
 
-export async function freeSlotTexts(db: Db, calendar: CalendarApi, now = new Date()): Promise<string[]> {
-  const [hours, calendarMap] = await Promise.all([getSetting(db, "businessHours"), getSetting(db, "calendarMap")]);
-  const ids = [...new Set(Object.values(calendarMap))];
-  const until = new Date(now.getTime() + 21 * 24 * 3600 * 1000);
-  const busy = await calendar.freeBusy(ids, now, until);
-  return proposeSlots({ busy, hours, from: now, days: 21, durationMinutes: hours.slotMinutes, count: 3 }).map(
-    (s) => `${formatJst(s.start)}〜${formatJst(s.end).split(" ")[1]}`,
-  );
+const MAX_CHECK_DAYS = 14;
+
+function parseJstDate(value: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return null;
+  const d = fromJst(Number(m[1]), Number(m[2]), Number(m[3]));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+const hm = (d: Date) => {
+  const p = jstParts(d);
+  return `${p.hour}:${String(p.minute).padStart(2, "0")}`;
+};
+
+/** 下書きを書く Claude に渡すカレンダーの調べもの（営業時間と、設定でつないだカレンダーを見る） */
+export function calendarTools(db: Db, calendar: CalendarApi, now = new Date()): NonNullable<DraftTools["calendar"]> {
+  const load = async () => {
+    const [hours, calendarMap] = await Promise.all([getSetting(db, "businessHours"), getSetting(db, "calendarMap")]);
+    return { hours, ids: [...new Set(Object.values(calendarMap))] };
+  };
+  return {
+    async check(fromDate, toDate) {
+      const from = parseJstDate(fromDate);
+      const to = parseJstDate(toDate) ?? from;
+      if (!from || !to) return "日付は YYYY-MM-DD で指定してください。";
+      const days = Math.min(MAX_CHECK_DAYS, Math.max(1, Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1));
+      const end = addDays(from, days);
+      const { hours, ids } = await load();
+      const [busy, events] = await Promise.all([
+        calendar.freeBusy(ids, from, end),
+        Promise.all(ids.map((id) => calendar.listEvents(id, from, end).catch(() => []))).then((l) => {
+          // 同じ予定が複数のカレンダーに出ることがある（共有カレンダーなど）
+          const seen = new Set<string>();
+          return l.flat().filter((e) => !seen.has(`${e.id}|${e.start}`) && Boolean(seen.add(`${e.id}|${e.start}`)));
+        }),
+      ]);
+      const lines = [`営業時間: ${hours.start}〜${hours.end}（営業日以外は「休み」）`];
+      for (let i = 0; i < days; i++) {
+        const day = addDays(from, i);
+        const next = addDays(day, 1);
+        const dayEvents = events
+          .filter((e) => {
+            const s = e.allDay ? parseJstDate(e.start) ?? new Date(e.start) : new Date(e.start);
+            return s >= day && s < next;
+          })
+          .sort((a, b) => a.start.localeCompare(b.start))
+          .map((e) => (e.allDay ? `終日 ${e.summary}` : `${hm(new Date(e.start))}〜${hm(new Date(e.end))} ${e.summary}`));
+        const open = freeWindows(busy, hours, day);
+        const isOpenDay = hours.days.includes(jstParts(day).weekday);
+        lines.push(
+          `${formatJst(day, false)}: ${isOpenDay ? "" : "休み。"}予定 ${dayEvents.length ? dayEvents.join(" / ") : "なし"}。` +
+            (isOpenDay ? `空き ${open.length ? open.map((w) => `${hm(w.start)}〜${hm(w.end)}`).join("、") : "なし"}` : ""),
+        );
+      }
+      if (days < Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1) lines.push(`（${MAX_CHECK_DAYS}日分だけ表示しています）`);
+      return lines.join("\n");
+    },
+    async freeSlots(opts) {
+      const { hours, ids } = await load();
+      const start = opts.fromDate ? parseJstDate(opts.fromDate) : null;
+      // 指定日が今から24時間以内なら、急な候補を避けるため24時間後から
+      const from = start && start > now ? start : now;
+      const leadHours = Math.max(0, (now.getTime() + 24 * 3600_000 - from.getTime()) / 3600_000);
+      const days = opts.days ?? 21;
+      const busy = await calendar.freeBusy(ids, startOfJstDay(from), addDays(from, days + 1));
+      const duration = opts.durationMinutes ?? hours.slotMinutes;
+      const slots = proposeSlots({ busy, hours, from, days, durationMinutes: duration, count: opts.count ?? 3, leadHours });
+      if (!slots.length) return `${days}日以内に${duration}分の空きは見つかりませんでした。`;
+      return slots.map((s) => `- ${formatJst(s.start)}〜${hm(s.end)}`).join("\n");
+    },
+  };
 }
 
 /** Gmail の下書きの宛先・件名を保ったまま本文だけ差し替える（人が画面で編集して保存したとき） */

@@ -9,10 +9,10 @@ export function anthropic(): Anthropic {
 
 /** モデルは環境変数で差し替えられる（仕様書 5章の表が既定値） */
 export const MODELS = {
-  draft: process.env.CLAUDE_DRAFT_MODEL || "claude-opus-5",
+  draft: process.env.CLAUDE_DRAFT_MODEL || "claude-opus-5-5",
   classify: process.env.CLAUDE_CLASSIFY_MODEL || "claude-haiku-4-5",
   summarize: process.env.CLAUDE_SUMMARY_MODEL || "claude-haiku-4-5",
-  translate: process.env.CLAUDE_TRANSLATE_MODEL || "claude-opus-5",
+  translate: process.env.CLAUDE_TRANSLATE_MODEL || "claude-opus-5-5",
 };
 
 /** Claude が安全上の理由で応答しなかった（リトライしても同じ結果になる） */

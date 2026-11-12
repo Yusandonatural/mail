@@ -43,3 +43,24 @@ export function proposeSlots(req: SlotRequest): Interval[] {
   }
   return result;
 }
+
+/** 1日の営業時間から予定の入っている時間を除いた空き（短すぎる隙間は除く） */
+export function freeWindows(busy: Interval[], hours: BusinessHours, day: Date, minMinutes = 30): Interval[] {
+  const p = jstParts(day);
+  if (!hours.days.includes(p.weekday)) return [];
+  const s = hmToMinutes(hours.start);
+  const e = hmToMinutes(hours.end);
+  const open = fromJst(p.year, p.month, p.day, Math.floor(s / 60), s % 60);
+  const close = fromJst(p.year, p.month, p.day, Math.floor(e / 60), e % 60);
+  const blocks = busy
+    .filter((b) => b.start < close && b.end > open)
+    .sort((a, b) => a.start.getTime() - b.start.getTime());
+  const result: Interval[] = [];
+  let cursor = open;
+  for (const b of blocks) {
+    if (b.start > cursor) result.push({ start: cursor, end: b.start < close ? b.start : close });
+    if (b.end > cursor) cursor = b.end;
+  }
+  if (cursor < close) result.push({ start: cursor, end: close });
+  return result.filter((w) => w.end.getTime() - w.start.getTime() >= minMinutes * 60000);
+}
