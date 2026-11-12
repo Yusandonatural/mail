@@ -208,6 +208,9 @@ describe("Google のエラーの見分け", () => {
     expect(isGoogleTransient(googleError(503))).toBe(true);
     expect(isInvalidGrant(invalidGrant())).toBe(true);
     expect(isGooglePermanent(invalidGrant())).toBe(false);
+    // Google 以外のエラーの文言に「invalid_grant」が入っていても（メールの中身など）、連携は外さない
+    expect(isInvalidGrant(new Error("下書きの本文を取り出せませんでした: invalid_grant"))).toBe(false);
+    expect(isInvalidGrant(Object.assign(new Error("invalid_grant"), { config: {} }))).toBe(true);
     // Google 以外のエラー（コードを持つ DB のエラーなど）は Google の失敗と取り違えない
     expect(isGooglePermanent(Object.assign(new Error("db"), { code: 404 }))).toBe(false);
 

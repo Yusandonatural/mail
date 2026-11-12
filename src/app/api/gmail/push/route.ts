@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     // 失敗しても 204 を返す（500 を返すと Pub/Sub が送り直し続ける）。履歴 ID は進んでいないので、
     // 次の通知か 5 分ごとの cron が同じ範囲から読み直す。トークンが無効なら連携を外してログインし直してもらう
-    if (isInvalidGrant(err)) await markGoogleDisconnected(db, user);
+    if (isInvalidGrant(err)) await markGoogleDisconnected(db, user).catch((e) => console.error("mark disconnected failed", user.email, e));
     else console.error("push sync failed for", user.email, err);
     return new NextResponse(null, { status: 204 });
   }

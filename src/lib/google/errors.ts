@@ -31,7 +31,11 @@ export function isInvalidGrant(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as GoogleErrorLike;
   const data = e.response?.data as { error?: unknown } | undefined;
-  return data?.error === "invalid_grant" || /\binvalid_grant\b/.test(e.message ?? "");
+  if (data?.error === "invalid_grant") return true;
+  // 文言で見るのは Google の認証・API のエラー（gaxios）だけ。ほかのエラーの文言にメールの中身などが入って
+  // 「invalid_grant」を含んでも、連携を外して（トークンを消して）しまわないように
+  if (!("response" in err) && !("config" in err)) return false;
+  return /\binvalid_grant\b/.test(e.message ?? "");
 }
 
 const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded", "backendError"]);
