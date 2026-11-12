@@ -729,7 +729,7 @@ a.day-title:hover { color: var(--accent); }
   table.rtable, table.rtable tbody, table.rtable tr, table.rtable td { display: block; width: auto; }
   table.rtable thead { display: none; }
   table.rtable tr { border-bottom: 1px solid var(--line); padding: 8px 0; }
-  table.rtable td { border: 0; padding: 4px 0; }
+  table.rtable td { border: 0; padding: 4px 0; overflow-wrap: anywhere; }
   .rtable-label { display: inline; }
   .grid2 { grid-template-columns: 1fr; }
   .day-item { gap: 2px 10px; }

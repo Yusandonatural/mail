@@ -54,6 +54,14 @@ export function DraftEditor({
   const [beforeTranslate, setBeforeTranslate] = useState<string | null>(null);
   const router = useRouter();
   const [text, setText] = useState(draft.text);
+  // サーバーの本文（保存・書き直し・Gmail での編集で変わる）。手で直していなければ新しい本文に入れ替える。
+  // 作り直さず（key を変えず）に入れ替えるので、「保存しました」「書き直しました」の知らせが消えない
+  const [base, setBase] = useState(draft.text);
+  if (draft.text !== base) {
+    setBase(draft.text);
+    // 保存した本文は Gmail 側で前後の空白が詰められて戻るので、それも同じ本文とみなす
+    if (text === base || text.replace(/\r\n/g, "\n").trim() === draft.text) setText(draft.text);
+  }
   const [instruction, setInstruction] = useState("");
   const [status, setStatus] = useState<{ text: string; error?: boolean } | null>(null);
   const [pending, start] = useTransition();
@@ -90,6 +98,18 @@ export function DraftEditor({
       setStatus(r.ok ? { text: okMessage } : { text: r.error ?? "失敗しました", error: true });
       if (r.ok) router.refresh();
     });
+
+  /**
+   * Claude で書き直す。手で直した本文がまだ保存されていなければ先に Gmail に保存する
+   * （保存しておけば、サーバーは人が直した下書きとして残し、書き直しを別案として作る。保存しないと上書きで消える）
+   */
+  const rewrite = async (instr: string, withSlots = false) => {
+    if (dirty) {
+      const saved = await saveDraftAction(draft.id, text);
+      if (!saved.ok) return saved;
+    }
+    return generateDraftAction(rowId, instr, withSlots);
+  };
 
   return (
     <section className="panel stack" aria-labelledby={`draft-${draft.id}`}>
@@ -237,7 +257,7 @@ export function DraftEditor({
         <div className="stack">
           <div className="actions">
             {PRESETS.map((p) => (
-              <button key={p} type="button" disabled={pending} onClick={() => run(() => generateDraftAction(rowId, p), "書き直しました")}>
+              <button key={p} type="button" disabled={pending} onClick={() => run(() => rewrite(p), "書き直しました")}>
                 {p}
               </button>
             ))}
@@ -246,7 +266,7 @@ export function DraftEditor({
               disabled={pending}
               onClick={() =>
                 run(
-                  () => generateDraftAction(rowId, "カレンダーの空き時間から日程の候補を3つ示す形にしてください", true),
+                  () => rewrite("カレンダーの空き時間から日程の候補を3つ示す形にしてください", true),
                   "空き時間の候補を入れました",
                 )
               }
@@ -267,7 +287,7 @@ export function DraftEditor({
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing && instruction.trim() && !pending) {
                     e.preventDefault();
-                    run(() => generateDraftAction(rowId, instruction), "書き直しました");
+                    run(() => rewrite(instruction), "書き直しました");
                   }
                 }}
               />
@@ -275,7 +295,7 @@ export function DraftEditor({
             <button
               type="button"
               disabled={pending || !instruction.trim()}
-              onClick={() => run(() => generateDraftAction(rowId, instruction), "書き直しました")}
+              onClick={() => run(() => rewrite(instruction), "書き直しました")}
             >
               書き直す
             </button>

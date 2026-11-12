@@ -104,7 +104,9 @@ export async function translateReply(
   translator: Translator,
   input: { text: string; target: Language; signatures: { ja: string; en: string } },
 ): Promise<string> {
-  const { ja, en } = input.signatures;
+  // 設定画面のテキスト欄から保存した署名は改行が \r\n になっている。本文（\n）と比べられるよう揃える
+  const ja = input.signatures.ja.replace(/\r\n/g, "\n");
+  const en = input.signatures.en.replace(/\r\n/g, "\n");
   let body = input.text.replace(/\r\n/g, "\n").trim();
   const hadSignature = Boolean(ja.trim()) && body.includes(ja.trim());
   if (hadSignature) body = body.replace(ja.trim(), "").trim();

@@ -256,7 +256,7 @@ export default async function SettingsPage({
         <form action={saveAddressAction} className="inline-form" style={{ marginTop: 10 }}>
           <div>
             <label htmlFor="add-address">アドレスを追加</label>
-            <input id="add-address" name="address" type="email" placeholder="xxx@yusando.com" />
+            <input id="add-address" name="address" type="email" placeholder="xxx@yusando.com" required />
           </div>
           <div>
             <label htmlFor="add-address-folder">フォルダ</label>
@@ -308,7 +308,7 @@ export default async function SettingsPage({
           </div>
           <div>
             <label htmlFor="rule-pattern">ドメインまたはアドレス</label>
-            <input id="rule-pattern" name="pattern" placeholder="例：tax-office.jp" />
+            <input id="rule-pattern" name="pattern" placeholder="例：tax-office.jp" required />
           </div>
           <div>
             <label htmlFor="rule-folder">フォルダ</label>
@@ -579,7 +579,7 @@ export default async function SettingsPage({
 
       <section className="panel" aria-labelledby="audit">
         <h2 id="audit">操作の記録</h2>
-        <table className="simple">
+        <table className="simple rtable">
           <tbody>
             {logs.map(({ log, email }) => (
               <tr key={log.id}>

@@ -6,6 +6,7 @@ import { canSeeMessage } from "@/lib/access";
 import { currentUser } from "@/lib/session";
 import { mailFor } from "@/lib/services";
 import { parseMessage } from "@/lib/mail/parse";
+import { MessageNotFoundError } from "@/lib/google/mail-api";
 
 /** ブラウザで開いてよい形式。それ以外は必ずダウンロードにする */
 const INLINE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "text/plain"]);
@@ -25,7 +26,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ messageId: 
   if (row && !canSeeMessage(user, row)) return new NextResponse("forbidden", { status: 403 });
 
   const mail = mailFor(user);
-  const parsed = parseMessage(await mail.getMessage(messageId));
+  let parsed;
+  try {
+    parsed = parseMessage(await mail.getMessage(messageId));
+  } catch (err) {
+    // その人の Gmail に無いメール（ほかの人のメールの ID など）は 500 にせず「見つからない」にする
+    if (err instanceof MessageNotFoundError) return new NextResponse("not found", { status: 404 });
+    throw err;
+  }
   if (!row) {
     // アプリに取り込んでいないメール（スレッド内の送信済みメールなど）は、
     // 同じスレッドに見られるメールがあるときだけ（メール画面に出るものだけ）渡す

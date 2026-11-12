@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { contacts, drafts, messages, rules, type MessageRow, type User } from "@/lib/db/schema";
 import { audit } from "@/lib/audit";
@@ -415,16 +415,40 @@ export async function importMessageAction(formData: FormData): Promise<void> {
   const user = await requireUser();
   const db = await getDb();
   const id = String(formData.get("gmailMessageId"));
-  await processMessage(pipelineDeps(db, user), user, id);
+  const back = String(formData.get("back") ?? "");
+  const searchBack = back.startsWith("/search") ? back : "/search";
+  const result = await processMessage(pipelineDeps(db, user), user, id);
   const row = (
     await db
-      .select({ id: messages.id })
+      .select()
       .from(messages)
       .where(and(eq(messages.userId, user.id), eq(messages.gmailMessageId, id)))
       .limit(1)
   )[0];
-  if (row) redirect(`/m/${row.id}`);
-  redirect("/search");
+  if (row) {
+    // 見られないフォルダ（経理など）に分類されたときは開けない（開くと「見つかりません」になる）
+    if (canSeeMessage(user, row)) redirect(`/m/${row.id}`);
+    redirect(withNotice(searchBack, "このメールは見られないフォルダに振り分けられたため、開けません"));
+  }
+  // 自分が送ったメールは一覧の行にならない。同じスレッドに取り込み済みのメールがあれば、そのメール画面を開く
+  if (result.kind === "reply_recorded") {
+    const thread = (
+      await db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.userId, user.id), eq(messages.gmailThreadId, result.threadId)))
+        .orderBy(desc(messages.receivedAt))
+    ).filter((r) => canSeeMessage(user, r));
+    if (thread[0]) redirect(`/m/${thread[0].id}`);
+  }
+  redirect(
+    withNotice(
+      searchBack,
+      result.kind === "reply_recorded"
+        ? "送信済みのメールは一覧に取り込みません（返信したスレッドは対応済みにしました）"
+        : "このメールは一覧に取り込む対象ではありません（迷惑メール・ゴミ箱・下書きなど）",
+    ),
+  );
 }
 
 /**

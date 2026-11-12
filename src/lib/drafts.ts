@@ -156,7 +156,9 @@ export async function generateDraft(
   // Claude のスキルなどで Gmail に下書きが既にあれば、自動では作らずそれを取り込む
   if (opts.generatedBy === "auto" && (thread.messages ?? []).some((m) => m.labelIds?.includes("DRAFT"))) {
     await adoptGmailDrafts(db, mail, user, threadId);
-    if (await latestDraft(db, user.id, threadId)) return { kind: "skipped", reason: "下書きが既にあります" };
+    // アプリが自動で作った下書き（Gmail のスレッドにも DRAFT として出る）だけなら、下の
+    // 「相手から新しいメールが届いていれば作り直す」に進む（ここで止めると古いメールへの下書きが残る）
+    if ((await latestDraft(db, user.id, threadId))?.generatedBy === "gmail") return { kind: "skipped", reason: "下書きが既にあります" };
   }
 
   const previous = await latestDraft(db, user.id, threadId);

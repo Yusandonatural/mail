@@ -150,6 +150,23 @@ describe("返信下書きの生成", () => {
     expect((await generateDraft(deps, user, "t1", "m2", { generatedBy: "auto" })).kind).toBe("skipped");
   });
 
+  it("アプリの下書きがスレッドに DRAFT として出ていても、新しいメールに合わせて作り直す", async () => {
+    const { db, user, mail, drafter, deps } = await setup();
+    const first = await generateDraft(deps, user, "t1", "m1", { generatedBy: "auto" });
+    if (first.kind !== "created") throw new Error("unexpected");
+    // 本物の Gmail では threads.get に下書きも入る
+    const d0 = mail.drafts.get(first.draft.gmailDraftId)!;
+    mail.add(gmailMessage({ id: d0.messageId, threadId: "t1", from: "isozaki@yusando.com", text: "draft", labelIds: ["DRAFT"] }));
+    mail.add(
+      gmailMessage({ id: "m2", threadId: "t1", from: "Ben <ben@adventcha.example>", to: "wholesale@yusando.com", subject: "Re: Matcha 5kg", text: "Also 2kg of hojicha?" }),
+    );
+    const r = await generateDraft(deps, user, "t1", "m2", { generatedBy: "auto" });
+    expect(r.kind).toBe("updated");
+    expect(drafter.requests).toHaveLength(2);
+    const [d] = await db.select().from(drafts);
+    expect(d.replyToMessageId).toBe("m2");
+  });
+
   it("画面で編集した本文を、宛先と件名を保ったまま保存する", async () => {
     const { user, mail, deps } = await setup();
     const r = await generateDraft(deps, user, "t1", "m1", { generatedBy: "auto" });

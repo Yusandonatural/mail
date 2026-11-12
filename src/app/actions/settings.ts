@@ -19,6 +19,11 @@ import { backfill, requeueUnclassified } from "@/lib/sync";
 
 const done = () => revalidatePath("/settings");
 
+/** 利用者の欄に戻り、上の帯で知らせる */
+function withNotice(notice: string): string {
+  return `/settings?${new URLSearchParams({ notice }).toString()}#users`;
+}
+
 export async function saveAddressAction(formData: FormData): Promise<void> {
   const admin = await requireAdmin();
   const address = String(formData.get("address") ?? "").trim().toLowerCase();
@@ -98,9 +103,15 @@ export async function saveSignaturesAction(formData: FormData): Promise<void> {
     if (ja || en) byAddress[addr] = { ...(ja ? { ja } : {}), ...(en ? { en } : {}) };
     else delete byAddress[addr];
   }
+  // テキスト欄の改行は \r\n で届く。下書きの本文（\n）と比べて署名を見つけられるよう \n に揃える
+  const lf = (v: string) => v.replace(/\r\n/g, "\n");
+  for (const s of Object.values(byAddress)) {
+    if (s.ja) s.ja = lf(s.ja);
+    if (s.en) s.en = lf(s.en);
+  }
   await putSetting(db, "signatures", {
-    ja: String(formData.get("ja") ?? current.ja),
-    en: String(formData.get("en") ?? current.en),
+    ja: lf(String(formData.get("ja") ?? current.ja)),
+    en: lf(String(formData.get("en") ?? current.en)),
     byAddress,
   });
   await audit(db, admin.id, "settings_changed", "signatures");
@@ -156,7 +167,8 @@ export async function saveUserAction(formData: FormData): Promise<void> {
   const role = formData.get("role") === "admin" ? "admin" : "staff";
   const visible = formData.getAll("visibleFolders").map(String).filter(isFolder);
   const active = formData.get("active") !== "off";
-  if (email === admin.email && (role !== "admin" || !active)) throw new Error("自分の管理者権限は外せません");
+  // 本番では投げたエラーの文言が画面に出ないので、設定画面に戻して上の帯で知らせる
+  if (email === admin.email && (role !== "admin" || !active)) redirect(withNotice("自分の管理者権限は外せません（変更していません）"));
   const db = await getDb();
   if (formData.get("mode") === "add") {
     // 追加フォームから既存の人を上書きしない
@@ -165,7 +177,7 @@ export async function saveUserAction(formData: FormData): Promise<void> {
       .values({ email, role, visibleFolders: visible, active: true })
       .onConflictDoNothing()
       .returning({ id: users.id });
-    if (!added.length) throw new Error(`${email} は既に登録されています。一覧の方で変更してください`);
+    if (!added.length) redirect(withNotice(`${email} は既に登録されています。一覧の方で変更してください`));
   } else {
     await db
       .update(users)

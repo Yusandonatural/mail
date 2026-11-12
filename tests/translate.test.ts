@@ -58,6 +58,15 @@ describe("返信の翻訳", () => {
     expect(findPlaceholders(out)).toHaveLength(1);
   });
 
+  it("設定画面で保存した署名（改行が \\r\\n）でも外して差し替える", async () => {
+    const t = new FakeTranslator();
+    const crlf = { ja: signatures.ja.replace(/\n/g, "\r\n"), en: signatures.en.replace(/\n/g, "\r\n") };
+    const out = await translateReply(t, { text: `ベン様\n\n価格は【要確認：kg単価】です。\n\n${signatures.ja}`, target: "en", signatures: crlf });
+    expect(t.lastOutgoing?.body).not.toContain("礒﨑");
+    expect(out).toContain("Ryotaro Isozaki");
+    expect(out).not.toContain("\r");
+  });
+
   it("署名が無ければ署名を足さない", async () => {
     const out = await translateReply(new FakeTranslator(), { text: "価格は【要確認：kg単価】です。", target: "fr", signatures });
     expect(out).not.toContain("Ryotaro Isozaki");

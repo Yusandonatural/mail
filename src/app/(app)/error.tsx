@@ -11,7 +11,10 @@ export default function AppError({ error, reset }: { error: Error & { digest?: s
         Gmail や Google カレンダーとのやりとりで失敗したか、画面の処理でエラーが起きました。もう一度試しても直らないときは、下の番号を添えて知らせてください。
       </p>
       <p className="meta">
-        {error.message && !error.message.startsWith("An error occurred in the Server Components render") ? error.message : "詳しい内容はサーバーの記録にあります"}
+        {/* サーバーで起きたエラー（digest 付き）は、本番では中身が伏せられた英語の文言（React error #441 など）になるので出さない */}
+        {error.message && !error.digest && !error.message.startsWith("An error occurred in the Server Components render")
+          ? error.message
+          : "詳しい内容はサーバーの記録にあります"}
         {error.digest ? `（番号: ${error.digest}）` : ""}
       </p>
       <div className="actions">

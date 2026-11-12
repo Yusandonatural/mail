@@ -23,6 +23,10 @@ export default async function SearchPage({
   const q = sp.q ?? "";
   const folder = sp.folder && isFolder(sp.folder) ? sp.folder : null;
   const query = buildQuery(q, folder, sp.after ?? "", sp.before ?? "");
+  // 取り込めなかったときに戻る、この検索の URL
+  const self = `/search?${new URLSearchParams(
+    Object.entries({ q, folder: folder ?? "", after: sp.after ?? "", before: sp.before ?? "" }).filter(([, v]) => v),
+  ).toString()}`;
 
   let results: Array<{ parsed: ParsedMessage; rowId: number | null; hidden: boolean }> = [];
   let error: string | null = null;
@@ -125,6 +129,7 @@ export default async function SearchPage({
                         <div className="row">{body}</div>
                         <form action={importMessageAction} className="row-action">
                           <input type="hidden" name="gmailMessageId" value={p.id} />
+                          <input type="hidden" name="back" value={self} />
                           <SubmitButton>取り込んで開く</SubmitButton>
                         </form>
                       </>

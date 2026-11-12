@@ -401,7 +401,7 @@ export default async function MessagePage({
             ) : draftViews.length ? (
               draftViews.map((d, i) => (
                 <DraftEditor
-                  key={`${d.id}-${d.version}-${d.gmailMessageId}`}
+                  key={d.id}
                   draft={d}
                   rowId={row.id}
                   clientId={clientId}
