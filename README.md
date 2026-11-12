@@ -1,6 +1,6 @@
 # 悠三堂メール
 
-悠三堂の業務メールを、用途別アドレスで自動に振り分け、Claude が返信の下書きを用意し、日程は Google カレンダーに登録できるメールアプリです。
+悠三堂の業務メールを、用途別アドレスで自動に振り分け、Claude が Shopify やカレンダーを調べて返信の下書きを用意し、日程は Google カレンダーに登録できるメールアプリです。
 仕様書：[悠三堂メールアプリ 仕様書（ドラフト v0.1）](https://claude.ai/code/artifact/a2c4e0e1-3cc1-479f-b18f-5eec8085d511)
 
 メールの原本は Gmail に置いたままです。このアプリは Gmail の上に乗る業務用の画面で、DB には分類結果・ルール・下書きとの対応だけを持ち、メール本文は保存しません。
@@ -9,16 +9,20 @@
 
 | 仕様書 | 機能 | 主なファイル |
 | --- | --- | --- |
-| 3章 基本機能 | 受信一覧・閲覧・添付・新規作成・転送・検索・アーカイブ・迷惑メール・ゴミ箱 | `src/app/(app)/` |
+| 3章 基本機能 | Spark 風の受信箱（スレッドで1行、「今日・昨日・この1週間・○月」の見出しで区切る。すべて・要返信・下書き・要確認・日程ありで絞り込み）・閲覧・添付・新規作成・転送・検索 | `src/app/(app)/inbox/`, `src/lib/queries.ts` |
+| 3章 整理 | 一覧でチェックした行（またはメール画面）をまとめて迷惑メール・削除（ゴミ箱）・アーカイブ。迷惑メールにするとき「今後もこの送信者を迷惑メールへ」を選ぶと、以後は届いた時点で迷惑メールへ移す（設定画面のルールで解除） | `src/components/bulk-bar.tsx`, `src/app/actions/mail.ts` |
+| Gmail との同期 | Gmail 側でのアーカイブ・受信箱に戻す・ゴミ箱・迷惑メール・既読／未読・削除を、履歴（history）から読んでアプリに反映する。アプリでの操作は先に Gmail を変える | `src/lib/sync.ts` |
 | 4章 振り分け | 宛先アドレスで一次分類、Claude（claude-haiku-4-5）で内容・要返信・緊急度・言語・日程・金額を判定し、合成ルールでフォルダを決めて Gmail ラベルを付ける | `src/lib/classify/`, `src/lib/pipeline.ts` |
 | 4章 学習 | フォルダを直すときに「今後もこの送信者／ドメインは」を選ぶと送信者ルールになる | `src/app/actions/mail.ts` |
-| 5章 下書き | 要返信のメールに Claude（claude-opus-5-5）が、Shopify（商品・在庫・注文・規約）と Google カレンダー（予定・空き）を必要に応じて調べてから Gmail の下書きを作る。調べた内容は下書きのメモに残る。【要確認】が残っている間は送信できない。人が直した下書きは上書きせず別案として並べる | `src/lib/drafts.ts`, `src/lib/claude/drafter.ts` |
+| グループ宛て | info@ などグループ宛てで複数人に届いたメールは、誰か1人が返信すると（アプリからでも Gmail からでも）、同僚の受信箱の同じメールも対応済になり、二重に返信しない | `src/lib/pipeline.ts` |
+| 5章 下書き | 要返信のメールに Claude（claude-opus-5-5）が、Shopify（商品・価格・在庫・注文・配送や返品の規約）と Google カレンダー（予定・空き）を必要に応じて調べてから Gmail の下書きを作る（1〜2 分かかることがある）。調べた内容は下書きのメモに残る。【要確認】が残っている間は送信できない。人が直した下書きは上書きせず別案として並べる。Gmail で作られた返信下書きも取り込む | `src/lib/drafts.ts`, `src/lib/claude/drafter.ts` |
 | 6章 カレンダー | 日程候補の表示、仮予定の登録、空き時間から候補3つの提案、支払期日の終日予定、承諾の返信で確定の提案 | `src/lib/calendar-service.ts`, `src/lib/slots.ts` |
-| 8章 画面 | フォルダ・一覧・本文・下書き・日程・連絡先・今日の予定・設定。キーボード操作（j/k/Enter/e/r/u//）。スマホ表示 | `src/app/`, `src/components/` |
+| 8章 画面 | フォルダ・一覧・本文・下書き・日程・連絡先・今日の予定・設定。キーボード操作（j/k/Enter/e/r/u//、x で選択、! で迷惑メール、# で削除）。スマホ表示 | `src/app/`, `src/components/` |
+| Claude の状態 | 分類に失敗が続くと全画面の上に帯を出す（管理者には設定へのリンク）。設定画面の「接続をテストする」で API キーを確かめ、失敗していたメールを分類し直せる。「Shopify をテストする」で Shopify の読み取りを確かめる | `src/app/(app)/layout.tsx`, `src/app/(app)/settings/page.tsx` |
 | 11章 権限 | yusando.com の Google アカウントのみ。管理者と担当者（見られるフォルダを指定）。操作の記録 | `src/lib/access.ts`, `src/lib/audit.ts` |
 | 翻訳 | 外国語のメールは本文の下に日本語訳を出す。日本語で書いた返信を相手の言語に訳して下書きを置き換える（署名も差し替え、【要確認】は残す）。訳文は DB に保存しない | `src/lib/translate.ts`, `src/components/translation.tsx` |
 | 4章 通知 | 至急の要返信をスマホ・パソコンに通知（Web Push）。ホーム画面に追加して使える | `src/lib/notify.ts`, `public/sw.js` |
-| P4 | 連絡先メモと夜間の関係要約（Message Batches）、Shopify の注文照会（任意） | `src/lib/contacts.ts`, `src/lib/shopify.ts` |
+| P4 | 連絡先メモと夜間の関係要約（Message Batches） | `src/lib/contacts.ts` |
 | P4 freee | 経理フォルダの請求書・領収書の PDF や画像を、freee 会計のファイルボックスに送る（二重送信しない） | `src/lib/freee.ts`, `src/lib/freee-service.ts` |
 
 ### 送信について
@@ -32,7 +36,7 @@
 - Gmail API・Google Calendar API（`@googleapis/*`）。受信通知は Gmail → Pub/Sub → `/api/gmail/push`
 - Claude API（`@anthropic-ai/sdk`）
 - 非同期処理は DB のジョブキュー（`jobs` テーブル）。受信通知と 5 分ごとの cron で進める
-- デプロイ先は Cloud Run を想定（`Dockerfile`）
+- デプロイ先は Cloud Run（`Dockerfile`, `deploy/`）。リクエストの制限時間は 600 秒（下書きの生成に 1〜2 分かかるため）
 
 ## 初回セットアップ（仕様書のフェーズ P0）
 
@@ -46,21 +50,21 @@ Google Workspace と Google Cloud の管理者権限が必要です。Google Clo
    ```
 
 3. **OAuth クライアントを作る（手作業）。** コンソールの「OAuth 同意画面」を「内部」で作り、「認証情報」でウェブアプリの OAuth クライアントを作ります。リダイレクト URI は `<公開URL>/api/auth/callback`、JavaScript 生成元は `<公開URL>` です。できたクライアント ID・シークレットと Anthropic の API キーを、スクリプトが最後に表示するコマンドで Secret Manager に入れます。
-4. **デプロイする。** Cloud Build でコンテナを作り Cloud Run に出します。DB のマイグレーションはコンテナの起動時に自動で行います。最初の公開 URL は Cloud Run の URL でかまいません。独自ドメインにしたら、OAuth の設定と `APP_URL` を変えてもう一度実行します。
+4. **デプロイする。** Cloud Build でコンテナを作り Cloud Run に出します。DB のマイグレーション（`drizzle/`）はコンテナの起動時に自動で行います（複数台が同時に起動しても1台ずつ）。最初の公開 URL は Cloud Run の URL でかまいません。独自ドメインにしたら、OAuth の設定と `APP_URL` を変えてもう一度実行します。更新のときもこのコマンドだけで済みます（Cloud Shell で `git pull` してから）。
 
    ```sh
-   PROJECT_ID=<プロジェクト> APP_URL=https://<公開URL> ./deploy/setup-gcp.sh deploy
+   PROJECT_ID=<プロジェクト> REGION=asia-northeast1 APP_URL=https://<公開URL> ./deploy/setup-gcp.sh deploy
    ```
 
 5. **通知と定期実行をつなぐ。** Gmail の受信通知の送り先と、Cloud Scheduler の2つの定期実行を作ります。
 
    ```sh
-   PROJECT_ID=<プロジェクト> APP_URL=https://<公開URL> ./deploy/setup-gcp.sh wire
+   PROJECT_ID=<プロジェクト> REGION=asia-northeast1 APP_URL=https://<公開URL> ./deploy/setup-gcp.sh wire
    ```
 
    | 送信先 | 頻度 | 役割 |
    | --- | --- | --- |
-   | `/api/cron/tick` | 5 分ごと | 通知の取りこぼしを拾う、watch の更新、残ったジョブの実行 |
+   | `/api/cron/tick` | 5 分ごと | 通知の取りこぼしを拾う、watch の更新、Gmail で作られた下書きの取り込み、残ったジョブ（分類・下書き）の実行 |
    | `/api/cron/nightly` | 毎日 2:00（日本時間） | 連絡先ごとのやりとりの要約 |
 
 6. **ログインする。** `ADMIN_EMAILS` の人（既定は isozaki@）が最初にログインし、設定画面で担当者を追加します。担当者は各自ログインすると自分の受信箱が連携されます。過去のメールを分類したいときは設定画面の「過去のメールの取り込み」を使います。
@@ -68,7 +72,7 @@ Google Workspace と Google Cloud の管理者権限が必要です。Google Clo
 ### 任意の連携
 
 - **freee 会計。** freee アプリストアの開発者ページでアプリを作り、コールバック URL を `<公開URL>/api/freee/callback` にします。クライアント ID・シークレットを `FREEE_CLIENT_ID`・`FREEE_CLIENT_SECRET` として Secret Manager に入れて再デプロイし、設定画面の「freee と連携する」を押します。
-- **Shopify。** `SHOPIFY_STORE_DOMAIN`・`SHOPIFY_ADMIN_TOKEN`（読み取りだけのカスタムアプリ。権限は `read_products`・`read_inventory`・`read_orders`・`read_legal_policies`）を入れると、返信下書きを書く Claude が商品の価格・在庫・ページ、相手の注文、配送・返品の規約を調べてから書きます。設定画面の「Shopify をテストする」で確かめられます。
+- **Shopify。** Shopify の管理画面でカスタムアプリを作り、Admin API の権限を `read_products`・`read_inventory`・`read_orders`・`read_legal_policies`（読み取りだけ）にします。ストアのドメイン（`<ストア>.myshopify.com`）とアクセストークンを `SHOPIFY_STORE_DOMAIN`・`SHOPIFY_ADMIN_TOKEN` として Secret Manager に入れて再デプロイすると、返信下書きを書く Claude が商品の価格・在庫・ページ、相手の注文、配送・返品の規約を調べてから書きます。設定画面の「Shopify をテストする」で確かめられます。
 - **通知。** 鍵は手順 2 で作られます。各自がメニューの「通知を受け取る」を押した端末に届きます。iPhone は Safari の共有メニューから「ホーム画面に追加」したアプリで押してください。
 
 ## 開発
@@ -80,6 +84,8 @@ npm run typecheck
 npm run build
 npm run db:migrate   # 手元の Postgres に表を作る（DATABASE_URL と ALLOWED_DOMAIN が必要）
 ```
+
+表を変えるときは `src/lib/db/schema.ts` を直してから `npm run db:generate` で `drizzle/` にマイグレーションを作ります（手で書いたときも `drizzle/meta` のスナップショットを合わせ、`npx drizzle-kit check` と、何も変えずに `db:generate` して差分が出ないことを確かめてください）。
 
 ## 仕様書から仮に決めたこと
 

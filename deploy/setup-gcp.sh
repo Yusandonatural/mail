@@ -104,13 +104,17 @@ infra() {
   printf %s '<OAuth クライアントシークレット>' | gcloud --project $PROJECT_ID secrets create GOOGLE_CLIENT_SECRET --data-file=-
   printf %s '<Anthropic の API キー>'      | gcloud --project $PROJECT_ID secrets create ANTHROPIC_API_KEY --data-file=-
   任意: FREEE_CLIENT_ID / FREEE_CLIENT_SECRET / SHOPIFY_STORE_DOMAIN / SHOPIFY_ADMIN_TOKEN も同じ形で
+    （Shopify のカスタムアプリの権限: read_products, read_inventory, read_orders, read_legal_policies）
+  入れたあと deploy をやり直すと反映されます。
 MSG
 }
 
 deploy() {
   : "${APP_URL:?APP_URL（公開 URL）を指定してください。最初は Cloud Run の URL でよい}"
+  # 通知（Web Push）の連絡先は最初の管理者にする
+  local first_admin="${ADMINS%%,*}"
   gc builds submit --config deploy/cloudbuild.yaml \
-    --substitutions "_REGION=${REGION},_SERVICE=${SERVICE},_APP_URL=${APP_URL},_DOMAIN=${DOMAIN},_ADMINS=${ADMINS//,/;},_SQL=${PROJECT_ID}:${REGION}:${SQL_INSTANCE},_TOPIC=projects/${PROJECT_ID}/topics/${TOPIC},_PUSH_SA=${PUSH_SA},_RUN_SA=${RUN_SA}" .
+    --substitutions "_REGION=${REGION},_SERVICE=${SERVICE},_APP_URL=${APP_URL},_DOMAIN=${DOMAIN},_ADMINS=${ADMINS//,/;},_SQL=${PROJECT_ID}:${REGION}:${SQL_INSTANCE},_TOPIC=projects/${PROJECT_ID}/topics/${TOPIC},_PUSH_SA=${PUSH_SA},_RUN_SA=${RUN_SA},_VAPID_SUBJECT=mailto:${first_admin// /}" .
 }
 
 wire() {
@@ -131,11 +135,12 @@ wire() {
   schedule_job() {
     local name="$1" schedule="$2" path="$3"
     local args=(--location "$REGION" --schedule "$schedule" --time-zone "Asia/Tokyo" --uri "${APP_URL}${path}"
-      --http-method POST --headers "Authorization=Bearer ${secret}" --attempt-deadline 320s)
+      --http-method POST --attempt-deadline 620s)
+    # 更新は --update-headers、作成は --headers（update http は --headers を受け付けない）
     if gc scheduler jobs describe "$name" --location "$REGION" >/dev/null 2>&1; then
-      gc scheduler jobs update http "$name" "${args[@]}"
+      gc scheduler jobs update http "$name" "${args[@]}" --update-headers "Authorization=Bearer ${secret}"
     else
-      gc scheduler jobs create http "$name" "${args[@]}"
+      gc scheduler jobs create http "$name" "${args[@]}" --headers "Authorization=Bearer ${secret}"
     fi
   }
   schedule_job "${SERVICE}-tick" "*/5 * * * *" /api/cron/tick
