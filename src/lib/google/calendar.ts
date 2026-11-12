@@ -7,7 +7,7 @@ export class GoogleCalendarApi implements CalendarApi {
   private api: calendar_v3.Calendar;
 
   constructor(auth: OAuth2Client) {
-    this.api = calendar({ version: "v3", auth });
+    this.api = calendar({ version: "v3", auth, timeout: 60_000 });
   }
 
   async listCalendars() {

@@ -49,7 +49,7 @@ export class WebPushNotifier implements Notifier {
     if (!isPushEndpoint(sub.endpoint)) return "gone";
     const webpush = (await import("web-push")).default;
     webpush.setVapidDetails(
-      process.env.VAPID_SUBJECT || `mailto:${(process.env.ADMIN_EMAILS ?? "").split(",")[0] || "admin@example.com"}`,
+      process.env.VAPID_SUBJECT || `mailto:${(process.env.ADMIN_EMAILS ?? "").split(/[,;]/)[0].trim() || "admin@example.com"}`,
       process.env.VAPID_PUBLIC_KEY ?? "",
       process.env.VAPID_PRIVATE_KEY ?? "",
     );

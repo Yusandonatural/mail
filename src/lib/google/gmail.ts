@@ -14,7 +14,8 @@ export class GoogleMailApi implements MailApi {
   private api: gmail_v1.Gmail;
 
   constructor(auth: OAuth2Client) {
-    this.api = gmail({ version: "v1", auth });
+    // 応答の無い呼び出しで定期処理の持ち時間を使い切らないよう、1回の呼び出しは60秒まで
+    this.api = gmail({ version: "v1", auth, timeout: 60_000 });
   }
 
   async getProfile() {

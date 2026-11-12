@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
       });
       const fresh = (await db.select().from(users).where(eq(users.id, user.id)).limit(1))[0];
       const queued = await syncUser(db, mail, fresh);
-      // Claude のスキルなどで Gmail に作られた返信下書きを取り込み、受信箱の一番上に出す
+      // Claude のスキルなどで Gmail に作られた返信下書きを取り込み、「下書き」に出す
       const adopted = await adoptGmailDrafts(db, mail, fresh).catch((e) => {
         console.error("adopt drafts failed for", user.email, e);
         return 0;

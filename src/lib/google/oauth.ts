@@ -16,9 +16,6 @@ export const SERVER_SCOPES = [
   "https://www.googleapis.com/auth/calendar.readonly",
 ];
 
-/** ブラウザで送信ボタンを押したときだけ要求するスコープ */
-export const BROWSER_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.compose";
-
 export function redirectUri(): string {
   return `${config().APP_BASE_URL}/api/auth/callback`;
 }

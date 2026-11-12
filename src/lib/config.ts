@@ -37,7 +37,3 @@ export function config(): AppConfig {
   };
   return cached;
 }
-
-export function shopifyConfigured(): boolean {
-  return Boolean(process.env.SHOPIFY_STORE_DOMAIN && process.env.SHOPIFY_ADMIN_TOKEN);
-}

@@ -99,7 +99,7 @@ export async function moveFolder(formData: FormData): Promise<void> {
       .onConflictDoUpdate({ target: [rules.kind, rules.pattern], set: { folder } });
     await audit(db, user.id, "rule_created", pattern, { kind: remember, folder });
   }
-  // 振り分けたメールは受信箱（全て）から外れるので、一覧と左の件数も更新する
+  // フォルダの件数が変わるので、一覧と左の件数も更新する
   revalidatePath("/", "layout");
 }
 
