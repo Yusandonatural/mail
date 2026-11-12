@@ -10,6 +10,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 /**
  * 仕様書 10章のデータモデル。
@@ -76,6 +77,18 @@ export const messages = pgTable(
     index("messages_user_folder").on(t.userId, t.folder, t.receivedAt),
     index("messages_thread").on(t.userId, t.gmailThreadId),
     index("messages_rfc").on(t.rfcMessageId),
+    // 一覧：届いた順に新しい方からたどり、ページの分だけ読む
+    index("messages_user_received").on(t.userId, t.receivedAt, t.id),
+    // 要返信・下書きありのメール（全体のごく一部）
+    index("messages_open").on(t.userId).where(sql`${t.status} in ('new', 'draft_ready')`),
+    // 要確認のメール（全体のごく一部）
+    index("messages_review").on(t.userId).where(sql`${t.needsReview}`),
+    // 左の件数で数えるメール（要返信・未読・要確認）
+    index("messages_counted")
+      .on(t.userId)
+      .where(
+        sql`${t.status} not in ('skipped', 'archived') and (${t.unread} or ${t.needsReview} or (${t.needsReply} and ${t.status} in ('new', 'draft_ready')))`,
+      ),
   ],
 );
 
@@ -148,7 +161,11 @@ export const dateCandidates = pgTable(
     status: text("status").notNull().default("candidate"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("date_candidates_thread").on(t.userId, t.gmailThreadId)],
+  (t) => [
+    index("date_candidates_thread").on(t.userId, t.gmailThreadId),
+    // 一覧の「日程あり」はメールごとに引く
+    index("date_candidates_msg").on(t.userId, t.gmailMessageId),
+  ],
 );
 
 export const contacts = pgTable("contacts", {

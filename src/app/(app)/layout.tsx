@@ -16,11 +16,15 @@ export const dynamic = "force-dynamic";
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
   const db = await getDb();
-  const counts = await folderCounts(db, user);
+  // どのページでも読むので、まとめて並行に問い合わせる
+  const [counts, totalReply, claudeHealth] = await Promise.all([
+    folderCounts(db, user),
+    totalReplyCount(db, user),
+    getSetting(db, "claudeHealth"),
+  ]);
   const folders = visibleFolders(user);
-  const totalReply = await totalReplyCount(db, user);
 
-  const claudeFailure = claudeFailing(await getSetting(db, "claudeHealth"));
+  const claudeFailure = claudeFailing(claudeHealth);
 
   return (
     <div className="app">

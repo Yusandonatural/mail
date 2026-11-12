@@ -92,8 +92,11 @@ export default async function MessagePage({
 
   // 下書き（Gmail から本文を読む。Gmail 側で消えたものは閉じる。読めないときは触らない）
   const draftViews: DraftView[] = [];
-  for (const d of mail && !loadError ? await threadDrafts(db, user.id, row.gmailThreadId) : []) {
-    const g = await mail!.getDraft(d.gmailDraftId).catch(() => undefined);
+  const draftRows = mail && !loadError ? await threadDrafts(db, user.id, row.gmailThreadId) : [];
+  // 別案が複数あっても待ち時間が増えないよう、Gmail からは並行して読む
+  const gmailDrafts = await Promise.all(draftRows.map((d) => mail!.getDraft(d.gmailDraftId).catch(() => undefined)));
+  for (const [i, d] of draftRows.entries()) {
+    const g = gmailDrafts[i];
     if (g === undefined) continue;
     if (!g) {
       await db.update(drafts).set({ status: "discarded" }).where(eq(drafts.id, d.id));
@@ -114,12 +117,23 @@ export default async function MessagePage({
   let calendars: CalendarInfo[] = [];
   const agendas = new Map<string, CalendarEvent[]>();
   if (candidates.length && calendar) {
-    calendars = await calendar.listCalendars().catch(() => []);
+    const cal = calendar;
     const days = [...new Set(candidates.filter((c) => c.status === "candidate").map((c) => c.start.slice(0, 10)))].slice(0, 3);
-    for (const day of days) {
-      const d = parseDateish(day);
-      if (d) agendas.set(day, await eventsForDays(db, calendar, d, 1).catch(() => []));
-    }
+    // カレンダーの一覧と各日の予定は、Google から並行して読む
+    const [list, perDay] = await Promise.all([
+      cal.listCalendars().catch(() => []),
+      Promise.all(
+        days.map((day) => {
+          const d = parseDateish(day);
+          return d ? eventsForDays(db, cal, d, 1).catch(() => []) : null;
+        }),
+      ),
+    ]);
+    calendars = list;
+    days.forEach((day, i) => {
+      const events = perDay[i];
+      if (events) agendas.set(day, events);
+    });
   }
   const edits = await Promise.all(candidates.map((c) => defaultEdits(db, c)));
 

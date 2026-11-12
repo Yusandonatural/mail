@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNotNull, lte, ne, sql } from "drizzle-orm";
 import type { Db } from "./db";
-import { addressMap, contacts, dateCandidates, messages, rules, type User } from "./db/schema";
+import { addressMap, contacts, dateCandidates, drafts, messages, rules, type User } from "./db/schema";
 import { classifyByHeaders, matchBlockRule, type SenderRule } from "./classify/stage1";
 import { mergeClassification, type MergedClassification } from "./classify/merge";
 import type { Classifier, ContentClassification } from "./classify/types";
@@ -152,6 +152,16 @@ export async function closeForColleagues(db: Db, user: User, threadId: string, s
       { userId: c.userId, messageId: c.gmailMessageId },
       `replied:${c.userId}:${c.gmailMessageId}`,
     );
+  }
+  // 閉じたメールへの返信下書き（自動の下書きは最初に処理した1人に作る）も閉じる。
+  // 残すとその人のメール画面に出たままになり、同じお客様に二重に返信してしまうため。Gmail の下書き自体は消さない
+  const byUser = new Map<number, string[]>();
+  for (const c of closed) byUser.set(c.userId, [...(byUser.get(c.userId) ?? []), c.gmailMessageId]);
+  for (const [userId, ids] of byUser) {
+    await db
+      .update(drafts)
+      .set({ status: "discarded" })
+      .where(and(eq(drafts.userId, userId), inArray(drafts.replyToMessageId, ids), eq(drafts.status, "ready")));
   }
   return closed.length;
 }

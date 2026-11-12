@@ -1,4 +1,5 @@
-import { and, desc, eq, gte, inArray, isNotNull, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, lte, notExists, or, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "./db";
 import { dateCandidates, drafts, messages, rules, type MessageRow, type User } from "./db/schema";
 
@@ -21,6 +22,8 @@ export async function folderCounts(db: Db, user: User): Promise<Map<string, Fold
     from messages m,
       lateral (select m.folder as f union select jsonb_array_elements_text(m.secondary_folders)) x
     where m.user_id = ${user.id} and m.status not in ('skipped', 'archived')
+      -- 数える対象（要返信・未読・要確認）の行だけを読む（部分索引 messages_counted を使う）。件数が全て0のフォルダは返さない
+      and (m.unread or m.needs_review or (m.needs_reply and m.status in ('new', 'draft_ready')))
     group by x.f`);
   const rows = (res as unknown as { rows: Array<Record<string, unknown>> }).rows;
   return new Map(
@@ -38,16 +41,25 @@ export const FILTER_LABELS: Record<ListFilter, string> = {
   dates: "日程あり",
 };
 
-function inFolder(folder: string): SQL {
-  return or(eq(messages.folder, folder), sql`${messages.secondaryFolders} @> ${JSON.stringify([folder])}::jsonb`)!;
+/** messages 表か、その別名（同じスレッドの他のメールを見るサブクエリ用） */
+type MessagesTable = typeof messages;
+
+function inFolder(folder: string, t: MessagesTable = messages): SQL {
+  return or(eq(t.folder, folder), sql`${t.secondaryFolders} @> ${JSON.stringify([folder])}::jsonb`)!;
 }
 
 /**
  * どれかのフォルダに入っているメール。見られるフォルダが1つも無いときは何も出さない
- * （or() は条件が空だと undefined を返し、and() がそれを無視して全件になってしまうため）
+ * （or() は条件が空だと undefined を返し、and() がそれを無視して全件になってしまうため）。
+ * フォルダごとに OR でつなぐと行ごとの判定が重く、実行計画の見積もりも狂うので、配列でまとめて比べる
  */
-function anyFolder(folders: string[]): SQL {
-  return folders.length ? or(...folders.map(inFolder))! : sql`false`;
+function anyFolder(folders: string[], t: MessagesTable = messages): SQL {
+  if (!folders.length) return sql`false`;
+  const list = sql.join(
+    folders.map((f) => sql`${f}`),
+    sql`, `,
+  );
+  return sql`(${inArray(t.folder, folders)} or ${t.secondaryFolders} ?| array[${list}]::text[])`;
 }
 
 export interface ListedMessage extends MessageRow {
@@ -65,28 +77,33 @@ export interface ListedMessage extends MessageRow {
   threadDraft: boolean;
 }
 
-/** 一覧の共通条件（受信箱はニュースレター以外の全フォルダ） */
-function listConds(user: User, folder: Folder | null, filter: ListFilter): SQL[] {
+/** 一覧の共通条件（受信箱はニュースレター以外の全フォルダ）。t に別名を渡せば、その表の列で組み立てる */
+function listConds(user: User, folder: Folder | null, filter: ListFilter, t: MessagesTable = messages): SQL[] {
   const visible = visibleFolders(user);
   // アーカイブ・迷惑メール・ゴミ箱にしたメールは一覧に出さない
-  const conds: SQL[] = [eq(messages.userId, user.id), sql`${messages.status} not in ('skipped', 'archived')`];
-  if (folder) conds.push(inFolder(folder));
-  else conds.push(anyFolder(visible.filter((f) => f !== "info")), sql`${messages.folder} <> 'info'`);
-  if (filter === "reply") conds.push(and(eq(messages.needsReply, true), inArray(messages.status, ["new", "draft_ready"]))!);
-  if (filter === "draft") conds.push(eq(messages.status, "draft_ready"));
-  if (filter === "review") conds.push(eq(messages.needsReview, true));
-  if (filter === "dates") conds.push(hasDatesSql);
+  const conds: SQL[] = [eq(t.userId, user.id), sql`${t.status} not in ('skipped', 'archived')`];
+  if (folder) conds.push(inFolder(folder, t));
+  else conds.push(anyFolder(visible.filter((f) => f !== "info"), t), sql`${t.folder} <> 'info'`);
+  if (filter === "reply") conds.push(and(eq(t.needsReply, true), inArray(t.status, ["new", "draft_ready"]))!);
+  if (filter === "draft") conds.push(eq(t.status, "draft_ready"));
+  if (filter === "review") conds.push(eq(t.needsReview, true));
+  if (filter === "dates") conds.push(hasDatesSql(t));
   return conds;
 }
 
-// 外側の messages を明示的に参照する（列名だけだとサブクエリ側の列に解決されてしまう）
-const hasDatesSql = sql<boolean>`exists (select 1 from date_candidates d where d.user_id = "messages"."user_id" and d.gmail_message_id = "messages"."gmail_message_id" and d.status in ('candidate', 'tentative'))`;
-const openSql = sql`(${messages.needsReply} and ${messages.status} in ('new', 'draft_ready'))`;
+// 外側の messages（または別名）を表名付きで参照する（列名だけだとサブクエリ側の列に解決されてしまう）。
+// 列オブジェクトは WHERE と結合のある SELECT では表名付きで出力される
+const hasDatesSql = (t: MessagesTable = messages) =>
+  sql<boolean>`exists (select 1 from date_candidates d where d.user_id = ${t.userId} and d.gmail_message_id = ${t.gmailMessageId} and d.status in ('candidate', 'tentative'))`;
+const openSql = (t: MessagesTable) => sql`(${t.needsReply} and ${t.status} in ('new', 'draft_ready'))`;
 const freeeSentSql = sql<boolean>`exists (select 1 from freee_uploads f where f.gmail_message_id = "messages"."gmail_message_id" or (f.rfc_message_id is not null and f.rfc_message_id = "messages"."rfc_message_id"))`;
 
 /**
  * 一覧。スレッドごとに1行にまとめ、最後にメールが届いた順（新しいものが上）に並べる。
  * 行に出すのはスレッドの最新のメール。
+ * 全件にウィンドウ関数をかけるとメールが増えるほど遅くなるので、届いた順の索引を新しい方からたどり、
+ * 「同じスレッドに条件に合うもっと新しいメールが無い」ものだけをページの分だけ拾う。
+ * スレッドの件数などは、拾った行のスレッドについてだけ数える。
  */
 export async function listMessages(
   db: Db,
@@ -94,37 +111,59 @@ export async function listMessages(
   opts: { folder: Folder | null; filter: ListFilter; page: number; pageSize?: number },
 ): Promise<ListedMessage[]> {
   const size = opts.pageSize ?? 50;
-  const conds = listConds(user, opts.folder, opts.filter);
-  const ranked = db
-    .select({
-      rid: sql<number>`${messages.id}`.as("rid"),
-      rn: sql<number>`row_number() over (partition by ${messages.gmailThreadId} order by ${messages.receivedAt} desc, ${messages.id} desc)`.as("rn"),
-      n: sql<number>`count(*) over (partition by ${messages.gmailThreadId})`.as("n"),
-      anyUnread: sql<boolean>`bool_or(${messages.unread}) over (partition by ${messages.gmailThreadId})`.as("any_unread"),
-      anyOpen: sql<boolean>`bool_or(${openSql}) over (partition by ${messages.gmailThreadId})`.as("any_open"),
-      anyUrgent: sql<boolean>`bool_or(${openSql} and ${messages.urgency} = 'high') over (partition by ${messages.gmailThreadId})`.as("any_urgent"),
-      anyDraft: sql<boolean>`bool_or(${messages.status} = 'draft_ready') over (partition by ${messages.gmailThreadId})`.as("any_draft"),
-    })
+  const conds = (t: MessagesTable = messages) => listConds(user, opts.folder, opts.filter, t);
+  const newer = alias(messages, "newer") as unknown as MessagesTable;
+  const page = db
+    .select({ pid: sql<number>`${messages.id}`.as("pid") })
     .from(messages)
-    .where(and(...conds))
-    .as("ranked");
+    .where(
+      and(
+        ...conds(),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(newer)
+            .where(
+              and(
+                eq(newer.gmailThreadId, messages.gmailThreadId),
+                sql`(${newer.receivedAt}, ${newer.id}) > (${messages.receivedAt}, ${messages.id})`,
+                ...conds(newer),
+              ),
+            ),
+        ),
+      ),
+    )
+    .orderBy(desc(messages.receivedAt), desc(messages.id))
+    .limit(size + 1)
+    .offset(opts.page * size)
+    .as("page");
+  const t = alias(messages, "th") as unknown as MessagesTable;
+  const thread = db
+    .select({
+      n: sql<number>`count(*)`.as("n"),
+      anyUnread: sql<boolean>`bool_or(${t.unread})`.as("any_unread"),
+      anyOpen: sql<boolean>`bool_or(${openSql(t)})`.as("any_open"),
+      anyUrgent: sql<boolean>`bool_or(${openSql(t)} and ${t.urgency} = 'high')`.as("any_urgent"),
+      anyDraft: sql<boolean>`bool_or(${t.status} = 'draft_ready')`.as("any_draft"),
+    })
+    .from(t)
+    .where(and(eq(t.gmailThreadId, messages.gmailThreadId), ...conds(t)))
+    .as("thread");
   const rows = await db
     .select({
       m: messages,
-      hasDates: hasDatesSql,
+      hasDates: hasDatesSql(),
       freeeSent: freeeSentSql,
-      n: ranked.n,
-      anyUnread: ranked.anyUnread,
-      anyOpen: ranked.anyOpen,
-      anyUrgent: ranked.anyUrgent,
-      anyDraft: ranked.anyDraft,
+      n: thread.n,
+      anyUnread: thread.anyUnread,
+      anyOpen: thread.anyOpen,
+      anyUrgent: thread.anyUrgent,
+      anyDraft: thread.anyDraft,
     })
     .from(messages)
-    .innerJoin(ranked, sql`${ranked.rid} = ${messages.id}`)
-    .where(sql`${ranked.rn} = 1`)
-    .orderBy(desc(messages.receivedAt), desc(messages.id))
-    .limit(size + 1)
-    .offset(opts.page * size);
+    .innerJoin(page, sql`${page.pid} = ${messages.id}`)
+    .crossJoinLateral(thread)
+    .orderBy(desc(messages.receivedAt), desc(messages.id));
   return rows.map((r) => ({
     ...r.m,
     hasDates: Boolean(r.hasDates),
