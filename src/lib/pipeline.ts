@@ -223,22 +223,12 @@ export async function processMessage(
     throw err;
   }
   const msg = parseMessage(raw);
-  if (existing.length) {
-    if (msg.labelIds.some((l) => l === "SPAM" || l === "TRASH")) return { kind: "skipped", reason: "already_processed" };
-    // Gmail の迷惑メール・ゴミ箱から戻された：古い行を消して、届いたメールとして分類し直す
-    await db.transaction(async (txRaw) => {
-      const tx = txRaw as unknown as Db;
-      await tx
-        .delete(dateCandidates)
-        .where(
-          and(
-            eq(dateCandidates.userId, user.id),
-            eq(dateCandidates.gmailMessageId, gmailMessageId),
-            eq(dateCandidates.status, "candidate"),
-          ),
-        );
-      await tx.delete(messages).where(eq(messages.id, existing[0].id));
-    });
+  // Gmail の迷惑メール・ゴミ箱から戻された：届いたメールとして分類し直す。古い行は最後の記録と同じ
+  // トランザクションで消す（先に消すと、分類の失敗でやり直したときに「戻されたメール」と分からなくなり、
+  // 迷惑メールに指定した送信者のメールを迷惑メールへ戻してしまう）
+  const restoredRowId = existing.length ? existing[0].id : null;
+  if (restoredRowId !== null && msg.labelIds.some((l) => l === "SPAM" || l === "TRASH")) {
+    return { kind: "skipped", reason: "already_processed" };
   }
   // 下書き（自分の下書きは From が自分なので、返信と取り違えないよう先に除く）
   if (msg.labelIds.includes("DRAFT")) return { kind: "skipped", reason: "DRAFT" };
@@ -259,7 +249,7 @@ export async function processMessage(
   const { senderRules, addresses } = await loadRules(db);
   // 「今後も迷惑メールへ」にした送信者：分類せず（Claude も使わず）迷惑メールへ移す
   // ただし人が Gmail の迷惑メール・ゴミ箱から戻したメールは、本人の判断を優先して迷惑メールへ戻さない
-  if (!existing.length && matchBlockRule(from.email, senderRules)) {
+  if (restoredRowId === null && matchBlockRule(from.email, senderRules)) {
     await mail.modifyMessage(gmailMessageId, ["SPAM"], ["INBOX", "UNREAD"]);
     return { kind: "skipped", reason: "blocked" };
   }
@@ -345,6 +335,23 @@ export async function processMessage(
 
   const messageRowId = await db.transaction(async (txRaw) => {
     const tx = txRaw as unknown as Db;
+    if (restoredRowId !== null) {
+      await tx
+        .delete(dateCandidates)
+        .where(
+          and(
+            eq(dateCandidates.userId, user.id),
+            eq(dateCandidates.gmailMessageId, gmailMessageId),
+            eq(dateCandidates.status, "candidate"),
+          ),
+        );
+      // 同時に別の処理が戻していれば（行が skipped でなくなっていれば）何もしない
+      const removed = await tx
+        .delete(messages)
+        .where(and(eq(messages.id, restoredRowId), eq(messages.status, "skipped")))
+        .returning({ id: messages.id });
+      if (!removed.length) return null;
+    }
     const inserted = await tx
     .insert(messages)
     .values({

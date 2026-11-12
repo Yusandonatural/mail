@@ -53,6 +53,8 @@ export async function syncUser(db: Db, mail: MailApi, user: User): Promise<numbe
     // push と cron が同じ人を同時に同期することがある。履歴 ID を読み直して、先に進んだ方から続きを読む
     for (let round = 0; round < 3; round++) {
       const changes = await mail.listHistory(startHistoryId);
+      // Gmail を読む処理はロックを持つ前に済ませる（Gmail の応答を待つ間、行のロックと DB の接続を握り続けないように）
+      const sentTimes = await threadSentTimes(db, mail, user, changes.inboxIds ?? []);
       const result = await db.transaction(async (txRaw) => {
         const tx = txRaw as unknown as Db;
         // 同時に走った同期が先に履歴を進めていれば、ここで読んだ変更（古い範囲）は反映しない。
@@ -79,11 +81,18 @@ export async function syncUser(db: Db, mail: MailApi, user: User): Promise<numbe
             .set({ unread: false })
             .where(and(eq(messages.userId, user.id), inArray(messages.gmailMessageId, readIds)));
         }
-        await applyGmailChanges(tx, mail, user, changes);
+        const relabel = await applyGmailChanges(tx, user, changes, sentTimes);
         await tx.update(users).set({ historyId }).where(eq(users.id, user.id));
-        return { queued: n };
+        return { queued: n, relabel };
       });
-      if (result.queued !== undefined) return result.queued;
+      if (result.queued !== undefined) {
+        // Gmail の「要返信」「下書きあり」を外すのは、記録が確定しロックを放した後（失敗しても一覧はアーカイブのまま。
+        // ラベルは次に人が触るまで残る）
+        await markRepliedLabels(mail, result.relabel).catch((err) =>
+          console.error("label archived messages failed", user.id, err),
+        );
+        return result.queued;
+      }
       if (!result.movedTo) return 0;
       startHistoryId = result.movedTo;
     }
@@ -108,12 +117,43 @@ export async function syncUser(db: Db, mail: MailApi, user: User): Promise<numbe
 }
 
 /**
- * 人が Gmail（ウェブ・スマホ）で直接行った操作を一覧に反映する。
- * アプリ自身のアーカイブ・迷惑メール・ゴミ箱も同じ履歴で届くが、その行は既に archived / skipped なので何も変わらない。
+ * 受信トレイに戻されたアーカイブ済みのメールについて、スレッドで自分たちが送った時刻（スレッドごと）を Gmail から読む。
+ * 読めなかったスレッドは空（返信なし）として扱う
  */
-async function applyGmailChanges(db: Db, mail: MailApi, user: User, changes: HistoryChanges): Promise<void> {
+async function threadSentTimes(db: Db, mail: MailApi, user: User, inboxIds: string[]): Promise<Map<string, number[]>> {
+  const sentAt = new Map<string, number[]>();
+  if (!inboxIds.length) return sentAt;
+  const rows = await db
+    .select({ threadId: messages.gmailThreadId })
+    .from(messages)
+    .where(and(eq(messages.userId, user.id), inArray(messages.gmailMessageId, inboxIds), eq(messages.status, "archived")));
+  for (const threadId of new Set(rows.map((r) => r.threadId))) {
+    const thread = await mail.getThread(threadId).catch((err) => {
+      console.error("thread lookup failed", threadId, err);
+      return null;
+    });
+    sentAt.set(
+      threadId,
+      (thread?.messages ?? []).filter((m) => m.labelIds?.includes("SENT")).map((m) => Number(m.internalDate ?? 0)),
+    );
+  }
+  return sentAt;
+}
+
+/**
+ * 人が Gmail（ウェブ・スマホ）で直接行った操作を一覧に反映する。DB だけを変え、Gmail は呼ばない（ロックの中で呼ぶため）。
+ * アプリ自身のアーカイブ・迷惑メール・ゴミ箱も同じ履歴で届くが、その行は既に archived / skipped なので何も変わらない。
+ * 戻り値は、Gmail の「要返信」「下書きあり」を外して対応済にするメール（要返信・下書きありのままアーカイブされたもの）
+ */
+async function applyGmailChanges(
+  db: Db,
+  user: User,
+  changes: HistoryChanges,
+  sentTimes: Map<string, number[]>,
+): Promise<string[]> {
   const { unreadIds = [], archivedIds = [], inboxIds = [], trashedIds = [], deletedIds = [] } = changes;
   const mine = (ids: string[]) => and(eq(messages.userId, user.id), inArray(messages.gmailMessageId, ids));
+  const relabel: string[] = [];
   if (unreadIds.length) await db.update(messages).set({ unread: true }).where(mine(unreadIds));
 
   // ゴミ箱・迷惑メールへ移された、完全に削除された：アプリの迷惑メール・ゴミ箱と同じく一覧から外す。
@@ -141,10 +181,7 @@ async function applyGmailChanges(db: Db, mail: MailApi, user: User, changes: His
       .update(messages)
       .set(archive)
       .where(and(mine(archivedIds), notInArray(messages.status, ["archived", "skipped"])));
-    await markRepliedLabels(
-      mail,
-      open.map((r) => r.gmailMessageId),
-    ).catch((err) => console.error("label archived messages failed", user.id, err));
+    relabel.push(...open.map((r) => r.gmailMessageId));
   }
 
   // 受信トレイに戻された：アーカイブした行を一覧に戻す。要返信はアーカイブで外れているので戻さず、
@@ -154,19 +191,8 @@ async function applyGmailChanges(db: Db, mail: MailApi, user: User, changes: His
       .select({ id: messages.id, threadId: messages.gmailThreadId, receivedAt: messages.receivedAt })
       .from(messages)
       .where(and(mine(inboxIds), eq(messages.status, "archived")));
-    const sentAt = new Map<string, number[]>();
-    for (const threadId of new Set(rows.map((r) => r.threadId))) {
-      const thread = await mail.getThread(threadId).catch((err) => {
-        console.error("thread lookup failed", threadId, err);
-        return null;
-      });
-      sentAt.set(
-        threadId,
-        (thread?.messages ?? []).filter((m) => m.labelIds?.includes("SENT")).map((m) => Number(m.internalDate ?? 0)),
-      );
-    }
     const replied = rows
-      .filter((r) => sentAt.get(r.threadId)!.some((t) => t >= r.receivedAt.getTime()))
+      .filter((r) => (sentTimes.get(r.threadId) ?? []).some((t) => t >= r.receivedAt.getTime()))
       .map((r) => r.id);
     const done = rows.map((r) => r.id).filter((id) => !replied.includes(id));
     for (const [status, ids] of [["replied", replied], ["done", done]] as const) {
@@ -177,6 +203,7 @@ async function applyGmailChanges(db: Db, mail: MailApi, user: User, changes: His
         .where(and(inArray(messages.id, ids), eq(messages.status, "archived")));
     }
   }
+  return relabel;
 }
 
 /** 最後に取り込んだメールから今日までの日数（1日の余裕を足し、最大 30 日）。メールが無ければ 0 */

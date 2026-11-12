@@ -277,19 +277,23 @@ export async function generateDraft(
   } else {
     // 初めて作る、または人が直した下書きがある（上書きせず別案として並べる）
     const ref = await mail.createDraft(raw, threadId);
+    const values = {
+      userId: user.id,
+      gmailThreadId: threadId,
+      replyToMessageId: target.id,
+      gmailDraftId: ref.draftId,
+      version: livePrevious ? livePrevious.version + 1 : 1,
+      bodyHash: bodyHash(result.body),
+      notes,
+      instruction: opts.instruction ?? null,
+      generatedBy: opts.generatedBy,
+    };
+    // Gmail に作ってから記録するまでの間に、cron の取り込み（adoptGmailDrafts）が同じ下書きを
+    // 「Gmail で作られた下書き」として先に記録していることがある。一意の索引で失敗させず、アプリの下書きとして上書きする
     const [created] = await db
       .insert(drafts)
-      .values({
-        userId: user.id,
-        gmailThreadId: threadId,
-        replyToMessageId: target.id,
-        gmailDraftId: ref.draftId,
-        version: livePrevious ? livePrevious.version + 1 : 1,
-        bodyHash: bodyHash(result.body),
-        notes,
-        instruction: opts.instruction ?? null,
-        generatedBy: opts.generatedBy,
-      })
+      .values(values)
+      .onConflictDoUpdate({ target: [drafts.userId, drafts.gmailDraftId], set: { ...values, status: "ready" } })
       .returning();
     outcome = { kind: "created", draft: created, alternative: Boolean(livePrevious) };
   }
