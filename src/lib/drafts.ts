@@ -170,7 +170,10 @@ export async function generateDraft(
     } else {
       previousText = draftText(parseMessage(current.message));
       humanEdited = bodyHash(previousText) !== previous.bodyHash;
-      if (opts.generatedBy === "auto") return { kind: "skipped", reason: "下書きが既にあります" };
+      // 同じメールへの下書きがあれば自動では作り直さない。相手から新しいメールが届いていれば、それに合わせて作り直す
+      if (opts.generatedBy === "auto" && previous.replyToMessageId === target.id) {
+        return { kind: "skipped", reason: "下書きが既にあります" };
+      }
     }
   }
   const livePrevious = previousText !== null ? previous : null;
@@ -259,6 +262,8 @@ export async function generateDraft(
       .update(drafts)
       .set({
         version: livePrevious.version + 1,
+        // 新しく届いたメールに合わせて作り直したときは、返信先もそのメールにする
+        replyToMessageId: target.id,
         bodyHash: bodyHash(result.body),
         notes,
         instruction: opts.instruction ?? null,

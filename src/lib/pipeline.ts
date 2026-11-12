@@ -85,7 +85,13 @@ async function reuseClassification(db: Db, rfcMessageId: string | null): Promise
  * 過去メールの取り込みや再試行では、新しいメールが先に処理されることがあるため。
  * グループ宛てで他の人の受信箱にも届いている同じメールも、あわせて対応済にする。
  */
-export async function recordReply(deps: PipelineDeps, user: User, threadId: string, sentAt?: Date): Promise<void> {
+export async function recordReply(
+  deps: PipelineDeps,
+  user: User,
+  threadId: string,
+  sentAt?: Date,
+  opts: { closeColleagues?: boolean } = {},
+): Promise<void> {
   const { db, mail } = deps;
   const conds = [
     eq(messages.userId, user.id),
@@ -98,7 +104,8 @@ export async function recordReply(deps: PipelineDeps, user: User, threadId: stri
     .set({ status: "replied", needsReply: false })
     .where(and(...conds))
     .returning({ gmailMessageId: messages.gmailMessageId });
-  await closeForColleagues(db, user, threadId, sentAt);
+  // 社内の人だけに宛てた返信（「〇〇さん、対応お願いします」など）では、同僚の受信箱のメールは閉じない
+  if (opts.closeColleagues !== false) await closeForColleagues(db, user, threadId, sentAt);
   if (!updated.length) return;
   // 状態ラベルはメールごとに付けているので、外すのも対象のメールだけ（後から届いたメールの「要返信」は残す）
   await markRepliedLabels(mail, updated.map((u) => u.gmailMessageId));
@@ -234,7 +241,9 @@ export async function processMessage(
   if (msg.labelIds.includes("SENT") || msg.from?.email === user.email) {
     // 社内への転送などは返信ではないので、スレッドの「要返信」はそのままにする
     if (FORWARD_SUBJECT.test(msg.subject)) return { kind: "skipped", reason: "own_forward" };
-    await recordReply(deps, user, msg.threadId, msg.date);
+    const ownDomain = user.email.slice(user.email.indexOf("@") + 1).toLowerCase();
+    const external = [...msg.to, ...msg.cc].some((a) => a.email.slice(a.email.indexOf("@") + 1).toLowerCase() !== ownDomain);
+    await recordReply(deps, user, msg.threadId, msg.date, { closeColleagues: external });
     return { kind: "reply_recorded", threadId: msg.threadId };
   }
   const skipLabel = msg.labelIds.find((l) => SKIP_LABELS.includes(l));
@@ -244,7 +253,8 @@ export async function processMessage(
 
   const { senderRules, addresses } = await loadRules(db);
   // 「今後も迷惑メールへ」にした送信者：分類せず（Claude も使わず）迷惑メールへ移す
-  if (matchBlockRule(from.email, senderRules)) {
+  // ただし人が Gmail の迷惑メール・ゴミ箱から戻したメールは、本人の判断を優先して迷惑メールへ戻さない
+  if (!existing.length && matchBlockRule(from.email, senderRules)) {
     await mail.modifyMessage(gmailMessageId, ["SPAM"], ["INBOX", "UNREAD"]);
     return { kind: "skipped", reason: "blocked" };
   }

@@ -109,7 +109,8 @@ export async function markReviewed(formData: FormData): Promise<void> {
   const mail = mailFor(user);
   const review = await new LabelResolver(mail).existingId(STATUS_LABELS.needsReview);
   if (review) await mail.modifyMessage(row.gmailMessageId, [], [review]);
-  await db.update(messages).set({ needsReview: false }).where(eq(messages.id, row.id));
+  // 人が確かめた振り分けなので、「分類し直す」で動かさない
+  await db.update(messages).set({ needsReview: false, source: "manual" }).where(eq(messages.id, row.id));
   revalidatePath("/", "layout");
 }
 

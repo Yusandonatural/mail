@@ -131,6 +131,25 @@ describe("返信下書きの生成", () => {
     expect(d.notes).toContain("確認した情報: カレンダー 2026-11-20〜2026-11-20");
   });
 
+  it("送る前に相手から新しいメールが届いたら、自動の下書きをそのメールに合わせて作り直す", async () => {
+    const { db, user, mail, drafter, deps } = await setup();
+    const first = await generateDraft(deps, user, "t1", "m1", { generatedBy: "auto" });
+    expect(first.kind).toBe("created");
+    // 同じメールには作り直さない
+    expect((await generateDraft(deps, user, "t1", "m1", { generatedBy: "auto" })).kind).toBe("skipped");
+    mail.add(
+      gmailMessage({ id: "m2", threadId: "t1", from: "Ben <ben@adventcha.example>", to: "wholesale@yusando.com", subject: "Re: Matcha 5kg", text: "Also 2kg of hojicha?" }),
+    );
+    const r = await generateDraft(deps, user, "t1", "m2", { generatedBy: "auto" });
+    expect(r.kind).toBe("updated");
+    expect(drafter.requests).toHaveLength(2);
+    const [d] = await db.select().from(drafts);
+    expect(d.replyToMessageId).toBe("m2");
+    expect(mail.drafts.size).toBe(1);
+    // もう一度動いても作り直さない
+    expect((await generateDraft(deps, user, "t1", "m2", { generatedBy: "auto" })).kind).toBe("skipped");
+  });
+
   it("画面で編集した本文を、宛先と件名を保ったまま保存する", async () => {
     const { user, mail, deps } = await setup();
     const r = await generateDraft(deps, user, "t1", "m1", { generatedBy: "auto" });

@@ -334,3 +334,49 @@ describe("左の件数はスレッドの数", () => {
     expect(await filterCounts(db, user, "tour")).toMatchObject({ reply: 2, review: 1 });
   });
 });
+
+describe("3回目のまとめ直し", () => {
+  it("社内の人だけに宛てた返信では、同僚の受信箱のメールは閉じない", async () => {
+    const { db, a, b } = await twoUsers();
+    const mailA = new FakeMail();
+    const mailB = new FakeMail();
+    mailA.add(groupMail("xa", "ta"));
+    mailB.add(groupMail("xb", "tb"));
+    const classifier = new FakeClassifier();
+    await processMessage({ db, mail: mailA, classifier }, a, "xa");
+    await processMessage({ db, mail: mailB, classifier }, b, "xb");
+    // A が B にだけ「対応お願いします」と返信
+    mailA.add(gmailMessage({ id: "sa", threadId: "ta", from: a.email, to: b.email, subject: "Re: x", labelIds: ["SENT"] }));
+    await processMessage({ db, mail: mailA, classifier }, a, "sa");
+    expect((await rowOf(db, a.id)).status).toBe("replied");
+    expect((await rowOf(db, b.id)).status).toBe("new");
+    // お客様に返信したら閉じる
+    mailA.add(gmailMessage({ id: "sa2", threadId: "ta", from: a.email, to: "guest@t.example", subject: "Re: x", labelIds: ["SENT"] }));
+    await processMessage({ db, mail: mailA, classifier }, a, "sa2");
+    expect((await rowOf(db, b.id)).status).toBe("replied");
+  });
+
+  it("迷惑メールに指定した送信者でも、人が Gmail で戻したメールは迷惑メールに戻さない", async () => {
+    const db = await testDb();
+    const user = await makeUser(db);
+    const { rules } = await import("@/lib/db/schema");
+    await db.insert(rules).values({ kind: "sender", pattern: "guest@t.example", folder: "blocked" });
+    const mail = new FakeMail();
+    mail.add(groupMail("x1", "t1"));
+    const classifier = new FakeClassifier();
+    // 1回目：ブロックで迷惑メールへ（行は作らない）。アプリで迷惑メールにした行が残っている場合を作る
+    await db.insert(messages).values({
+      userId: user.id,
+      gmailMessageId: "x1",
+      gmailThreadId: "t1",
+      fromEmail: "guest@t.example",
+      folder: "tour",
+      source: "address",
+      status: "skipped",
+      receivedAt: new Date(),
+    });
+    const r = await processMessage({ db, mail, classifier }, user, "x1");
+    expect(r.kind).toBe("classified");
+    expect(mail.modifications.some((m) => m.add.includes("SPAM"))).toBe(false);
+  });
+});
