@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db";
 import { addressMap, auditLog, jobs, playbooks, rules, users } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/session";
 import { calendarFor } from "@/lib/services";
-import { getSetting } from "@/lib/settings";
+import { claudeFailing, getSetting } from "@/lib/settings";
 import {
   CATEGORIES,
   CATEGORY_LABELS,
@@ -31,6 +31,7 @@ import {
   saveUserAction,
   saveNotifyAction,
   reclassifyAction,
+  testClaudeAction,
 } from "@/app/actions/settings";
 import { countUnclassified } from "@/lib/sync";
 import { disconnectFreeeAction, selectFreeeCompanyAction } from "@/app/actions/freee";
@@ -55,11 +56,13 @@ function FolderSelect({ name, value, withBlock }: { name: string; value?: string
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ freee?: string; backfill?: string }>;
+  searchParams: Promise<{ freee?: string; backfill?: string; claude?: string }>;
 }) {
-  const { freee: freeeMessage, backfill: backfillQueued } = await searchParams;
+  const { freee: freeeMessage, backfill: backfillQueued, claude: claudeTest } = await searchParams;
   const admin = await requireAdmin();
   const db = await getDb();
+  const claudeHealth = await getSetting(db, "claudeHealth");
+  const claudeFailure = claudeFailing(claudeHealth);
   const [addresses, ruleRows, userRows, playbookRows, logs, failedJobs] = await Promise.all([
     db.select().from(addressMap).orderBy(addressMap.address),
     db.select().from(rules).orderBy(desc(rules.createdAt)),
@@ -454,6 +457,22 @@ export default async function SettingsPage({
             </form>
           </details>
         ))}
+      </div>
+
+      <div className="panel">
+        <h2 id="claude">Claude の接続</h2>
+        {claudeFailure ? (
+          <div className="banner error">分類に失敗しています：{claudeFailure}</div>
+        ) : (
+          <p className="meta">
+            {claudeHealth.lastOkAt ? `最後に分類できたのは ${formatJst(new Date(claudeHealth.lastOkAt))} です。` : "まだ記録がありません。"}
+          </p>
+        )}
+        {claudeTest === "ok" ? <div className="notes">接続できました。下の「分類し直す」で、失敗していたメールを分類し直せます。</div> : null}
+        <p className="meta">API キーを入れ替えたあとは、ここで確かめてください。</p>
+        <form action={testClaudeAction}>
+          <SubmitButton>接続をテストする</SubmitButton>
+        </form>
       </div>
 
       <div className="panel">

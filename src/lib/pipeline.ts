@@ -10,8 +10,8 @@ import { LabelResolver } from "./labels";
 import { listIdToAddress, parseMessage, stripQuoted, type ParsedMessage } from "./mail/parse";
 import { enqueue } from "./jobs";
 import { canSeeMessage } from "./access";
-import { getSetting } from "./settings";
-import { isRetryableApiError } from "./claude/client";
+import { getSetting, recordClaudeResult } from "./settings";
+import { describeClaudeError, isRetryableApiError } from "./claude/client";
 
 export interface PipelineDeps {
   db: Db;
@@ -162,8 +162,10 @@ export async function processMessage(
         // 混雑（429）や一時的な障害はジョブごと後でやり直す。それ以外は要確認として置く
         if (isRetryableApiError(err)) throw err;
         console.error("classification failed", gmailMessageId, err);
+        await recordClaudeResult(db, describeClaudeError(err)).catch(() => undefined);
         content = null;
       }
+      if (content) await recordClaudeResult(db, null).catch(() => undefined);
     }
   }
 

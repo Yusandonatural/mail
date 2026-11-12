@@ -70,3 +70,24 @@ export function parseDateish(value: string): Date | null {
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
 }
+
+/** 一覧の時刻表示：今日は 14:05、昨日は「昨日」、1週間以内は曜日、今年は 11/3、それより前は 2025/11/3 */
+export function formatListTime(d: Date, now = new Date()): string {
+  const days = Math.round((startOfJstDay(now).getTime() - startOfJstDay(d).getTime()) / 86_400_000);
+  const p = jstParts(d);
+  if (days <= 0) return `${p.hour}:${pad(p.minute)}`;
+  if (days === 1) return "昨日";
+  if (days < 7) return `${WEEKDAYS[p.weekday]}曜`;
+  if (p.year === jstParts(now).year) return `${p.month}/${p.day}`;
+  return `${p.year}/${p.month}/${p.day}`;
+}
+
+/** 一覧の見出し：今日・昨日・今週・それより前は月ごと */
+export function dayGroupLabel(d: Date, now = new Date()): string {
+  const days = Math.round((startOfJstDay(now).getTime() - startOfJstDay(d).getTime()) / 86_400_000);
+  if (days <= 0) return "今日";
+  if (days === 1) return "昨日";
+  if (days < 7) return "この1週間";
+  const p = jstParts(d);
+  return p.year === jstParts(now).year ? `${p.month}月` : `${p.year}年${p.month}月`;
+}

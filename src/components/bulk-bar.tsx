@@ -64,7 +64,7 @@ export function BulkBar() {
           </label>
         </>
       ) : (
-        <span className="meta">チェックしてまとめて迷惑メール・削除できます（行の右端の「迷惑」「削除」でも1通ずつ）</span>
+        <span className="meta bulk-hint">アイコンを押して選ぶと、まとめて迷惑メール・削除できます</span>
       )}
     </div>
   );

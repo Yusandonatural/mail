@@ -3,7 +3,7 @@ import type { Db } from "./db";
 import { dateCandidates, drafts, messages, type MessageRow, type User } from "./db/schema";
 
 import { visibleFolders } from "./access";
-import { PERSONAL_FOLDER_KEY, type Folder } from "./domain";
+import type { Folder } from "./domain";
 
 export interface FolderCount {
   reply: number;
@@ -32,69 +32,100 @@ export type ListFilter = "all" | "reply" | "draft" | "review" | "dates";
 export const FILTER_LABELS: Record<ListFilter, string> = {
   all: "すべて",
   reply: "要返信",
-  draft: "下書きあり",
+  draft: "下書き",
   review: "要確認",
   dates: "日程あり",
 };
-
-export interface ListedMessage extends MessageRow {
-  hasDates: boolean;
-  freeeSent: boolean;
-}
 
 function inFolder(folder: string): SQL {
   return or(eq(messages.folder, folder), sql`${messages.secondaryFolders} @> ${JSON.stringify([folder])}::jsonb`)!;
 }
 
-/**
- * 「受信箱（全て）」に出すメール：まだどの業務フォルダにも振り分けられていないもの。
- * 個人フォルダにあって業務フォルダの副ラベルも無いメールと、振り分けに自信が無い「要確認」のメール。
- * 振り分け済みのメールは、それぞれのフォルダだけに出す。
- */
-function unsorted(): SQL {
-  return or(
-    eq(messages.needsReview, true),
-    and(
-      eq(messages.folder, PERSONAL_FOLDER_KEY),
-      sql`not exists (select 1 from jsonb_array_elements_text(${messages.secondaryFolders}) f where f <> ${PERSONAL_FOLDER_KEY})`,
-    ),
-  )!;
+export interface ListedMessage extends MessageRow {
+  hasDates: boolean;
+  freeeSent: boolean;
+  /** 同じスレッドで一覧の条件に合うメールの数（2以上なら「やり取り」） */
+  threadCount: number;
+  /** スレッドの中に未読があるか */
+  threadUnread: boolean;
 }
 
+/** 一覧の共通条件（受信箱はニュースレター以外の全フォルダ） */
+function listConds(user: User, folder: Folder | null, filter: ListFilter): SQL[] {
+  const visible = visibleFolders(user);
+  const conds: SQL[] = [eq(messages.userId, user.id), sql`${messages.status} <> 'skipped'`];
+  if (folder) conds.push(inFolder(folder));
+  else conds.push(or(...visible.filter((f) => f !== "info").map(inFolder))!, sql`${messages.folder} <> 'info'`);
+  if (filter === "reply") conds.push(and(eq(messages.needsReply, true), inArray(messages.status, ["new", "draft_ready"]))!);
+  if (filter === "draft") conds.push(eq(messages.status, "draft_ready"));
+  if (filter === "review") conds.push(eq(messages.needsReview, true));
+  if (filter === "dates") conds.push(hasDatesSql);
+  return conds;
+}
+
+// 外側の messages を明示的に参照する（列名だけだとサブクエリ側の列に解決されてしまう）
+const hasDatesSql = sql<boolean>`exists (select 1 from date_candidates d where d.user_id = "messages"."user_id" and d.gmail_message_id = "messages"."gmail_message_id" and d.status in ('candidate', 'tentative'))`;
+const freeeSentSql = sql<boolean>`exists (select 1 from freee_uploads f where f.gmail_message_id = "messages"."gmail_message_id" or (f.rfc_message_id is not null and f.rfc_message_id = "messages"."rfc_message_id"))`;
+
+/**
+ * 一覧。スレッドごとに1行にまとめ、最後にメールが届いた順（新しいものが上）に並べる。
+ * 行に出すのはスレッドの最新のメール。
+ */
 export async function listMessages(
   db: Db,
   user: User,
-  opts: { folder: Folder | null; filter: ListFilter; page: number; pageSize?: number; excludeDrafts?: boolean },
+  opts: { folder: Folder | null; filter: ListFilter; page: number; pageSize?: number },
 ): Promise<ListedMessage[]> {
   const size = opts.pageSize ?? 50;
-  const visible = visibleFolders(user);
-  const conds: SQL[] = [eq(messages.userId, user.id), sql`${messages.status} <> 'skipped'`];
-  if (opts.folder) conds.push(inFolder(opts.folder));
-  else {
-    conds.push(or(...visible.filter((f) => f !== "info").map(inFolder))!, sql`${messages.folder} <> 'info'`);
-    // 「受信箱（全て）」には振り分け前のメールだけを出す。
-    // ただし「下書きあり」は、Claude の下書きをまとめて確認できるよう全フォルダから出す
-    if (opts.filter !== "draft") conds.push(unsorted());
-  }
-  // 受信箱（全て）では、下書きのあるメールは上の「Claude の返信下書き」にまとめて出す
-  if (opts.excludeDrafts) conds.push(sql`${messages.status} <> 'draft_ready'`);
-  if (opts.filter === "reply") conds.push(and(eq(messages.needsReply, true), inArray(messages.status, ["new", "draft_ready"]))!);
-  if (opts.filter === "draft") conds.push(eq(messages.status, "draft_ready"));
-  if (opts.filter === "review") conds.push(eq(messages.needsReview, true));
-  // 外側の messages を明示的に参照する（列名だけだとサブクエリ側の列に解決されてしまう）
-  const hasDates = sql<boolean>`exists (select 1 from date_candidates d where d.user_id = "messages"."user_id" and d.gmail_message_id = "messages"."gmail_message_id" and d.status in ('candidate', 'tentative'))`;
-  if (opts.filter === "dates") conds.push(hasDates);
-  const freeeSent = sql<boolean>`exists (select 1 from freee_uploads f where f.gmail_message_id = "messages"."gmail_message_id" or (f.rfc_message_id is not null and f.rfc_message_id = "messages"."rfc_message_id"))`;
-
-  // 新しく届いた順（至急のものは左端の赤い帯で見分ける）
-  const rows = await db
-    .select({ m: messages, hasDates, freeeSent })
+  const conds = listConds(user, opts.folder, opts.filter);
+  const ranked = db
+    .select({
+      rid: sql<number>`${messages.id}`.as("rid"),
+      rn: sql<number>`row_number() over (partition by ${messages.gmailThreadId} order by ${messages.receivedAt} desc, ${messages.id} desc)`.as("rn"),
+      n: sql<number>`count(*) over (partition by ${messages.gmailThreadId})`.as("n"),
+      anyUnread: sql<boolean>`bool_or(${messages.unread}) over (partition by ${messages.gmailThreadId})`.as("any_unread"),
+    })
     .from(messages)
     .where(and(...conds))
+    .as("ranked");
+  const rows = await db
+    .select({ m: messages, hasDates: hasDatesSql, freeeSent: freeeSentSql, n: ranked.n, anyUnread: ranked.anyUnread })
+    .from(messages)
+    .innerJoin(ranked, sql`${ranked.rid} = ${messages.id}`)
+    .where(sql`${ranked.rn} = 1`)
     .orderBy(desc(messages.receivedAt), desc(messages.id))
     .limit(size + 1)
     .offset(opts.page * size);
-  return rows.map((r) => ({ ...r.m, hasDates: Boolean(r.hasDates), freeeSent: Boolean(r.freeeSent) }));
+  return rows.map((r) => ({
+    ...r.m,
+    hasDates: Boolean(r.hasDates),
+    freeeSent: Boolean(r.freeeSent),
+    threadCount: Number(r.n),
+    threadUnread: Boolean(r.anyUnread),
+  }));
+}
+
+/** 絞り込みタブに出す件数（スレッド数） */
+export async function filterCounts(db: Db, user: User, folder: Folder | null): Promise<Record<"reply" | "draft" | "review", number>> {
+  const count = async (filter: ListFilter) => {
+    const res = await db
+      .select({ n: sql<number>`count(distinct ${messages.gmailThreadId})` })
+      .from(messages)
+      .where(and(...listConds(user, folder, filter)));
+    return Number(res[0]?.n ?? 0);
+  };
+  const [reply, draft, review] = await Promise.all([count("reply"), count("draft"), count("review")]);
+  return { reply, draft, review };
+}
+
+/** 未読のニュースレター・お知らせの数（受信箱の上にまとめて出す） */
+export async function unreadNewsletterCount(db: Db, user: User): Promise<number> {
+  if (!visibleFolders(user).includes("info")) return 0;
+  const res = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(messages)
+    .where(and(eq(messages.userId, user.id), eq(messages.folder, "info"), eq(messages.unread, true), sql`${messages.status} <> 'skipped'`));
+  return Number(res[0]?.n ?? 0);
 }
 
 export async function threadCandidates(db: Db, userId: number, threadId: string) {
@@ -113,7 +144,7 @@ export async function threadDrafts(db: Db, userId: number, threadId: string) {
     .orderBy(desc(drafts.createdAt), desc(drafts.id));
 }
 
-/** 「受信箱（全て）」の要返信の件数。一覧と同じく、振り分け前のメールだけを数える */
+/** 受信箱の要返信の件数（ニュースレター以外。副ラベルで複数のフォルダに出るメールも1通として数える） */
 export async function totalReplyCount(db: Db, user: User): Promise<number> {
   const visible = visibleFolders(user).filter((f) => f !== "info");
   const rows = await db
@@ -126,7 +157,6 @@ export async function totalReplyCount(db: Db, user: User): Promise<number> {
         inArray(messages.status, ["new", "draft_ready"]),
         or(...visible.map(inFolder))!,
         sql`${messages.folder} <> 'info'`,
-        unsorted(),
       ),
     );
   return Number(rows[0]?.n ?? 0);

@@ -1,10 +1,9 @@
 import type { Metadata, Viewport } from "next";
-import { Shippori_Mincho_B1, Zen_Kaku_Gothic_New } from "next/font/google";
+import { Zen_Kaku_Gothic_New } from "next/font/google";
 import "./globals.css";
 
-// 本文は読みやすい角ゴシック、見出しと屋号だけ明朝（茶の品書きのような落ち着き）
-const gothic = Zen_Kaku_Gothic_New({ weight: ["400", "500", "700"], subsets: ["latin"], variable: "--font-body", display: "swap" });
-const mincho = Shippori_Mincho_B1({ weight: ["600", "800"], subsets: ["latin"], variable: "--font-display", display: "swap" });
+// 端末の標準の文字（ヒラギノ・SF など）を優先し、無い端末だけ Zen Kaku Gothic を使う
+const gothic = Zen_Kaku_Gothic_New({ weight: ["400", "500", "700"], subsets: ["latin"], variable: "--font-fallback", display: "swap" });
 
 export const metadata: Metadata = {
   title: "悠三堂メール",
@@ -14,11 +13,11 @@ export const metadata: Metadata = {
   appleWebApp: { capable: true, title: "悠三堂メール", statusBarStyle: "default" },
 };
 
-export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#3f6b3a" };
+export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#ffffff" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="ja" className={`${gothic.variable} ${mincho.variable}`}>
+    <html lang="ja" className={gothic.variable}>
       <body>{children}</body>
     </html>
   );

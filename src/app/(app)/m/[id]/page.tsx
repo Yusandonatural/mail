@@ -138,12 +138,22 @@ export default async function MessagePage({
     receiptFiles.length > 0;
   const sent = showFreee ? new Map((await uploadsFor(db, row)).map((u) => [u.dedupeKey, u.receiptId])) : new Map();
 
+  // 一覧はスレッドで1行なので、スレッドのどれかが未読なら開いた時点でまとめて既読にする
+  const threadUnread =
+    row.unread ||
+    (
+      await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(eq(messages.userId, user.id), eq(messages.gmailThreadId, row.gmailThreadId), eq(messages.unread, true)))
+        .limit(1)
+    ).length > 0;
   const category = row.category && isCategory(row.category) ? CATEGORY_LABELS[row.category] : null;
   const clientId = process.env.GOOGLE_CLIENT_ID ?? "";
 
   return (
     <>
-      {row.unread ? <MarkRead rowId={row.id} /> : null}
+      {threadUnread ? <MarkRead rowId={row.id} /> : null}
       <div className="topbar">
         <Link href={back} data-back>
           ← 一覧に戻る

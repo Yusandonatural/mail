@@ -17,6 +17,13 @@ import {
   type Signatures,
 } from "./db/seed";
 
+/** Claude（分類）の呼び出し結果。失敗が続いていれば画面の上に知らせる */
+export interface ClaudeHealth {
+  lastError: string | null;
+  lastErrorAt: string | null;
+  lastOkAt: string | null;
+}
+
 interface SettingTypes {
   signatures: Signatures;
   businessHours: BusinessHours;
@@ -25,6 +32,7 @@ interface SettingTypes {
   businessContext: string;
   freee: FreeeSetting;
   notify: NotifySetting;
+  claudeHealth: ClaudeHealth;
 }
 
 const DEFAULTS: SettingTypes = {
@@ -35,6 +43,7 @@ const DEFAULTS: SettingTypes = {
   businessContext: DEFAULT_BUSINESS_CONTEXT,
   freee: DEFAULT_FREEE,
   notify: DEFAULT_NOTIFY,
+  claudeHealth: { lastError: null, lastErrorAt: null, lastOkAt: null },
 };
 
 export type SettingKey = keyof SettingTypes;
@@ -59,4 +68,18 @@ export async function putSetting<K extends SettingKey>(
     .insert(settings)
     .values({ key, value })
     .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date() } });
+}
+
+/** 最後に分類に失敗してから、まだ一度も成功していなければ失敗の理由を返す */
+export function claudeFailing(h: ClaudeHealth): string | null {
+  if (!h.lastErrorAt || !h.lastError) return null;
+  if (h.lastOkAt && h.lastOkAt >= h.lastErrorAt) return null;
+  return h.lastError;
+}
+
+/** 分類の成否を記録する。成功は、直前が失敗だったときだけ書き込む（毎回は書かない） */
+export async function recordClaudeResult(db: Db, error: string | null, now = new Date()): Promise<void> {
+  const h = await getSetting(db, "claudeHealth");
+  if (error) await putSetting(db, "claudeHealth", { ...h, lastError: error, lastErrorAt: now.toISOString() });
+  else if (claudeFailing(h) || !h.lastOkAt) await putSetting(db, "claudeHealth", { ...h, lastOkAt: now.toISOString() });
 }

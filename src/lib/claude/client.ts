@@ -37,3 +37,17 @@ export function isRetryableApiError(err: unknown): boolean {
   }
   return false;
 }
+
+/** Claude の API エラーを、画面で読める理由にする（キーや残高の問題は利用者が直せる） */
+export function describeClaudeError(err: unknown): string {
+  if (err instanceof Anthropic.APIError) {
+    const msg = err.message ?? "";
+    if (err.status === 401) return "Anthropic の API キーが正しくありません（入れ替えたキーを確認してください）";
+    if (err.status === 403) return "この API キーでは Claude を使う権限がありません";
+    if (err.status === 404) return `モデルが見つかりません（${msg.slice(0, 120)}）`;
+    if (err.status === 400 && /credit|balance/i.test(msg)) return "Anthropic の残高（クレジット）が足りません";
+    return `Claude の呼び出しに失敗しました（${err.status ?? "?"}: ${msg.slice(0, 160)}）`;
+  }
+  if (err instanceof Error && /api[_ ]?key/i.test(err.message)) return "Anthropic の API キーが設定されていません";
+  return err instanceof Error ? err.message.slice(0, 200) : String(err);
+}

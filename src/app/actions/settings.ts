@@ -1,6 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { ClaudeClassifier } from "@/lib/claude/classifier";
+import { describeClaudeError } from "@/lib/claude/client";
+import { recordClaudeResult } from "@/lib/settings";
 import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
@@ -199,4 +202,27 @@ export async function reclassifyAction(): Promise<void> {
   await audit(db, admin.id, "backfill", "reclassify", { queued: n });
   done();
   redirect(`/settings?backfill=${n}#backfill`);
+}
+
+/** Claude に短いメールを1通分類させて、API キー・残高・モデルが使えるかを確かめる */
+export async function testClaudeAction(): Promise<void> {
+  await requireAdmin();
+  const db = await getDb();
+  let error: string | null = null;
+  try {
+    await new ClaudeClassifier().classify({
+      from: "test@example.com",
+      to: ["info@yusando.com"],
+      subject: "接続テスト",
+      body: "抹茶を5kg卸していただけますか。",
+      attachmentNames: [],
+      receivedAt: new Date(),
+      stage1Folder: null,
+    });
+  } catch (err) {
+    error = describeClaudeError(err);
+  }
+  await recordClaudeResult(db, error);
+  done();
+  redirect(`/settings?claude=${error ? "ng" : "ok"}#claude`);
 }

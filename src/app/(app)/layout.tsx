@@ -9,6 +9,7 @@ import { KeyboardNav } from "@/components/keyboard-nav";
 import { NotifyToggle } from "@/components/notify-toggle";
 import { NoticeBanner } from "@/components/notice-banner";
 import { vapidPublicKey } from "@/lib/notify";
+import { claudeFailing, getSetting } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const folders = visibleFolders(user);
   const totalReply = await totalReplyCount(db, user);
 
+  const claudeFailure = claudeFailing(await getSetting(db, "claudeHealth"));
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -26,47 +29,67 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <span className="seal" aria-hidden="true">
             悠
           </span>
-          <span className="brand-name">
-            悠三堂
-            <small>メール</small>
-          </span>
+          <span className="brand-name">悠三堂メール</span>
         </a>
         <Suspense>
+          <NavLink href="/compose" icon="compose" className="compose-link">
+            新規作成
+          </NavLink>
           <nav className="nav">
-            <NavLink href="/compose">＋ 新規作成</NavLink>
-            <NavLink href="/inbox" count={totalReply} hot>
-              受信箱（全て）
+            <NavLink href="/inbox" icon="inbox" count={totalReply} hot>
+              受信箱
             </NavLink>
-            <NavLink href="/today">今日・今週の予定</NavLink>
-            <NavLink href="/search">検索</NavLink>
+            <NavLink href="/today" icon="calendar">
+              今日・今週の予定
+            </NavLink>
+            <NavLink href="/search" icon="search">
+              検索
+            </NavLink>
           </nav>
           <div className="nav-section">フォルダ</div>
           <nav className="nav folders">
             {folders.map((f) => {
               const c = counts.get(f);
               return (
-                <NavLink key={f} href={`/inbox?folder=${f}`} count={c?.reply ?? 0} hot>
+                <NavLink key={f} href={`/inbox?folder=${f}`} dot={f} count={f === "info" ? c?.unread ?? 0 : c?.reply ?? 0} hot={f !== "info"}>
                   {folderName(f)}
                 </NavLink>
               );
             })}
           </nav>
           {user.role === "admin" ? (
-            <>
-              <div className="nav-section">管理</div>
-              <nav className="nav">
-                <NavLink href="/settings">設定</NavLink>
-              </nav>
-            </>
+            <nav className="nav nav-bottom">
+              <NavLink href="/settings" icon="settings">
+                設定
+              </NavLink>
+            </nav>
           ) : null}
         </Suspense>
         {vapidPublicKey() ? <NotifyToggle publicKey={vapidPublicKey()!} /> : null}
-        <div className="nav-section">{user.email}</div>
-        <form action="/api/auth/logout" method="post" style={{ padding: "0 8px" }}>
-          <button type="submit">ログアウト</button>
-        </form>
+        <div className="account">
+          <span className="meta">{user.email}</span>
+          <form action="/api/auth/logout" method="post">
+            <button type="submit" className="link-button">
+              ログアウト
+            </button>
+          </form>
+        </div>
       </aside>
       <main className="main">
+        {claudeFailure ? (
+          <div className="banner error" role="alert">
+            <strong>Claude で分類できていません。</strong>
+            <span>
+              {claudeFailure}。直るまでのメールは「個人・要確認」に入ります。
+              {user.role === "admin" ? (
+                <>
+                  {" "}
+                  <a href="/settings#claude">設定で接続を確かめる</a>
+                </>
+              ) : null}
+            </span>
+          </div>
+        ) : null}
         <Suspense>
           <NoticeBanner userEmail={user.email} />
         </Suspense>

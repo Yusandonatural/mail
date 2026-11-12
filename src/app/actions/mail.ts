@@ -355,18 +355,23 @@ export async function importMessageAction(formData: FormData): Promise<void> {
 }
 
 /**
- * 開いたメールを既読にする。アプリの一覧・左の件数と、Gmail 側の未読の両方を更新する。
+ * 開いたメールを既読にする。一覧はスレッドごとに1行なので、同じスレッドのメールをまとめて既読にする。
+ * アプリの一覧・左の件数と、Gmail 側の未読の両方を更新する。
  * Gmail への反映に失敗しても、アプリ側は既読にする（次の同期で揃う）。
  */
 export async function markReadAction(rowId: number): Promise<void> {
   const { user, row } = await ownMessage(rowId);
-  if (!row.unread) return;
   const db = await getDb();
-  await db.update(messages).set({ unread: false }).where(eq(messages.id, row.id));
+  const changed = await db
+    .update(messages)
+    .set({ unread: false })
+    .where(and(eq(messages.userId, user.id), eq(messages.gmailThreadId, row.gmailThreadId), eq(messages.unread, true)))
+    .returning({ id: messages.id });
+  if (!changed.length) return;
   try {
-    await mailFor(user).modifyMessage(row.gmailMessageId, [], ["UNREAD"]);
+    await mailFor(user).modifyThread(row.gmailThreadId, [], ["UNREAD"]);
   } catch (err) {
-    console.error("mark read in Gmail failed", row.gmailMessageId, err);
+    console.error("mark read in Gmail failed", row.gmailThreadId, err);
   }
   revalidatePath("/", "layout");
 }
