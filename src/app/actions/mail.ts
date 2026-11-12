@@ -13,7 +13,7 @@ import { LabelResolver } from "@/lib/labels";
 import { buildMime, replySubject } from "@/lib/mail/mime";
 import { parseMessage } from "@/lib/mail/parse";
 import { hasPlaceholders } from "@/lib/placeholders";
-import { processMessage } from "@/lib/pipeline";
+import { closeForColleagues, processMessage } from "@/lib/pipeline";
 import { draftDeps, mailFor, pipelineDeps } from "@/lib/services";
 import { getSetting } from "@/lib/settings";
 import { bodyHash } from "@/lib/crypto";
@@ -201,6 +201,8 @@ export async function markSentAction(draftRowId: number): Promise<ActionResult> 
       await Promise.all([labels.existingId(STATUS_LABELS.needsReply), labels.existingId(STATUS_LABELS.draftReady)])
     ).filter((x): x is string => Boolean(x));
     await mail.modifyThread(d.gmailThreadId, [await labels.statusId("done")], remove);
+    // グループ宛てで他の人の受信箱にも届いている同じメールも対応済にする（その人の Gmail のラベルはジョブで外す）
+    await closeForColleagues(db, user, d.gmailThreadId);
     await audit(db, user.id, "mail_sent", d.gmailThreadId, { draftId: d.gmailDraftId });
     return { ok: true };
   } catch (err) {
@@ -221,13 +223,21 @@ function isRemoveKind(v: unknown): v is RemoveKind {
 async function removeRows(user: User, rows: MessageRow[], kind: RemoveKind): Promise<number[]> {
   const db = await getDb();
   const mail = mailFor(user);
-  const done = kind === "archive" ? await new LabelResolver(mail).statusId("done") : null;
+  const labels = new LabelResolver(mail);
+  const done = kind === "archive" ? await labels.statusId("done") : null;
+  // アーカイブしたメールは要返信でなくなるので、Gmail の「要返信」「下書きあり」も外す（DB と揃える）
+  const stale =
+    kind === "archive"
+      ? (
+          await Promise.all([labels.existingId(STATUS_LABELS.needsReply), labels.existingId(STATUS_LABELS.draftReady)])
+        ).filter((x): x is string => Boolean(x))
+      : [];
   const ok: number[] = [];
   for (const row of rows) {
     try {
       if (kind === "spam") await mail.modifyMessage(row.gmailMessageId, ["SPAM"], ["INBOX", "UNREAD"]);
       else if (kind === "trash") await mail.trashMessage(row.gmailMessageId);
-      else await mail.modifyMessage(row.gmailMessageId, [done!], ["INBOX"]);
+      else await mail.modifyMessage(row.gmailMessageId, [done!], ["INBOX", ...stale]);
       ok.push(row.id);
     } catch (err) {
       if (rows.length === 1) throw err;

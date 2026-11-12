@@ -106,33 +106,25 @@ export async function backfill(db: Db, mail: MailApi, user: User, days: number):
 
 /**
  * Claude で分類できていないメール（分類に失敗したもの・一斉配信として分類を省いたもの）を分類し直す。
- * 人が直したものとルールで決まったものは触らない。Gmail の古いラベルはジョブの中で外す。
+ * 人が直したもの（フォルダの移動・アーカイブ・迷惑メール・ゴミ箱）とルールで決まったものは触らない。
+ * 返信済み・下書きありは、分類し直しても要返信／新着に戻さない。Gmail の古いラベルはジョブの中で外す。
  */
+function unclassifiedConds(user: User) {
+  return and(
+    eq(messages.userId, user.id),
+    isNull(messages.confidence),
+    notInArray(messages.source, ["sender_rule", "domain_rule", "manual"]),
+    notInArray(messages.status, ["archived", "skipped"]),
+  );
+}
+
 export async function countUnclassified(db: Db, user: User): Promise<number> {
-  const rows = await db
-    .select({ id: messages.id })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.userId, user.id),
-        isNull(messages.confidence),
-        notInArray(messages.source, ["sender_rule", "domain_rule", "manual"]),
-      ),
-    );
+  const rows = await db.select({ id: messages.id }).from(messages).where(unclassifiedConds(user));
   return rows.length;
 }
 
 export async function requeueUnclassified(db: Db, user: User, now = new Date()): Promise<number> {
-  const rows = await db
-    .select()
-    .from(messages)
-    .where(
-      and(
-        eq(messages.userId, user.id),
-        isNull(messages.confidence),
-        notInArray(messages.source, ["sender_rule", "domain_rule", "manual"]),
-      ),
-    );
+  const rows = await db.select().from(messages).where(unclassifiedConds(user));
   let n = 0;
   const stamp = now.getTime().toString(36);
   for (const row of rows) {
@@ -156,7 +148,13 @@ export async function requeueUnclassified(db: Db, user: User, now = new Date()):
       await enqueue(
         tx,
         "process_message",
-        { userId: user.id, messageId: row.gmailMessageId, backfill: true, removeLabels },
+        {
+          userId: user.id,
+          messageId: row.gmailMessageId,
+          backfill: true,
+          removeLabels,
+          ...(row.status === "replied" || row.status === "draft_ready" ? { keepStatus: row.status } : {}),
+        },
         `reclassify:${user.id}:${row.gmailMessageId}:${stamp}`,
       );
     });

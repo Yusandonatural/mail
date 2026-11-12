@@ -1,4 +1,4 @@
-import { and, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lte, ne, sql } from "drizzle-orm";
 import type { Db } from "./db";
 import { addressMap, contacts, dateCandidates, messages, rules, type User } from "./db/schema";
 import { classifyByHeaders, matchBlockRule, type SenderRule } from "./classify/stage1";
@@ -41,18 +41,26 @@ async function loadAddresses(db: Db) {
 /** 同じメール（Message-ID）を別の人の受信箱で既に分類していれば、その結果を使い回す */
 async function reuseClassification(db: Db, rfcMessageId: string | null): Promise<ContentClassification | null> {
   if (!rfcMessageId) return null;
-  const rows = await db.select().from(messages).where(eq(messages.rfcMessageId, rfcMessageId)).limit(1);
-  const row = rows[0];
-  // 分類に失敗して要確認になった行や、自信の値が無い行は使い回さない（誤りが広がるため）
-  if (!row || !row.category || row.needsReview || row.confidence === null) return null;
-  if (row.source === "sender_rule" || row.source === "domain_rule" || row.source === "manual") return null;
+  const rows = await db.select().from(messages).where(eq(messages.rfcMessageId, rfcMessageId));
+  // 分類に失敗して要確認になった行や、自信の値が無い行は使い回さない（誤りが広がるため）。
+  // アーカイブ・迷惑メール・ゴミ箱にした行は「要返信」が消えていて元の判定が分からないので使わない
+  const row = rows.find(
+    (r) =>
+      r.category &&
+      !r.needsReview &&
+      r.confidence !== null &&
+      !["sender_rule", "domain_rule", "manual"].includes(r.source) &&
+      !["archived", "skipped"].includes(r.status),
+  );
+  if (!row) return null;
   const dates = await db
     .select()
     .from(dateCandidates)
     .where(and(eq(dateCandidates.userId, row.userId), eq(dateCandidates.gmailMessageId, row.gmailMessageId)));
   return {
     category: row.category as ContentClassification["category"],
-    needs_reply: row.needsReply,
+    // 返信済みの行は「要返信」を外してあるが、元の判定は要返信（返信済みかどうかは processMessage で別に見る）
+    needs_reply: row.needsReply || row.status === "replied",
     urgency: row.urgency as ContentClassification["urgency"],
     language: row.language as ContentClassification["language"],
     dates: dates.map((d) => ({
@@ -67,7 +75,7 @@ async function reuseClassification(db: Db, rfcMessageId: string | null): Promise
     due_date: row.dueDate,
     summary: row.summary,
     accepts_proposed_time: row.suggestConfirm,
-    confidence: row.confidence,
+    confidence: row.confidence ?? 0,
   };
 }
 
@@ -75,6 +83,7 @@ async function reuseClassification(db: Db, rfcMessageId: string | null): Promise
  * 自分たちが返信したスレッドの「要返信」を外し、対応済にする。
  * sentAt より後に届いたメール（返信の後に相手から来た新しいメール）は対象にしない。
  * 過去メールの取り込みや再試行では、新しいメールが先に処理されることがあるため。
+ * グループ宛てで他の人の受信箱にも届いている同じメールも、あわせて対応済にする。
  */
 export async function recordReply(deps: PipelineDeps, user: User, threadId: string, sentAt?: Date): Promise<void> {
   const { db, mail } = deps;
@@ -89,14 +98,73 @@ export async function recordReply(deps: PipelineDeps, user: User, threadId: stri
     .set({ status: "replied", needsReply: false })
     .where(and(...conds))
     .returning({ gmailMessageId: messages.gmailMessageId });
+  await closeForColleagues(db, user, threadId, sentAt);
   if (!updated.length) return;
+  // 状態ラベルはメールごとに付けているので、外すのも対象のメールだけ（後から届いたメールの「要返信」は残す）
+  await markRepliedLabels(mail, updated.map((u) => u.gmailMessageId));
+}
+
+/** 対応済のラベルを付け、要返信・下書きありを外す。Gmail で消されたメールは飛ばす */
+export async function markRepliedLabels(mail: MailApi, gmailMessageIds: string[]): Promise<void> {
+  if (!gmailMessageIds.length) return;
   const labels = new LabelResolver(mail);
   const remove = (
     await Promise.all([labels.existingId(STATUS_LABELS.needsReply), labels.existingId(STATUS_LABELS.draftReady)])
   ).filter((x): x is string => Boolean(x));
   const done = await labels.statusId("done");
-  // 状態ラベルはメールごとに付けているので、外すのも対象のメールだけ（後から届いたメールの「要返信」は残す）
-  for (const u of updated) await mail.modifyMessage(u.gmailMessageId, [done], remove);
+  for (const id of gmailMessageIds) {
+    await mail.modifyMessage(id, [done], remove).catch((err) => {
+      if (!(err instanceof MessageNotFoundError) && (err as { code?: number }).code !== 404) throw err;
+    });
+  }
+}
+
+/**
+ * グループ宛てのメールは同じものが複数人の受信箱に届く（Message-ID が同じで、user_id が違う行）。
+ * 誰か1人が返信したら、他の人の受信箱の同じメールも対応済にする（2人目に「要返信」が残らないように）。
+ * 他の人の Gmail のラベルはその人の Gmail でしか変えられないので、ジョブに積んで後で揃える。
+ */
+export async function closeForColleagues(db: Db, user: User, threadId: string, sentAt?: Date): Promise<number> {
+  const conds = [
+    eq(messages.userId, user.id),
+    eq(messages.gmailThreadId, threadId),
+    isNotNull(messages.rfcMessageId),
+  ];
+  if (sentAt) conds.push(lte(messages.receivedAt, sentAt));
+  const replied = await db.select({ rfc: messages.rfcMessageId }).from(messages).where(and(...conds));
+  const rfcIds = [...new Set(replied.map((r) => r.rfc!))];
+  if (!rfcIds.length) return 0;
+  const closed = await db
+    .update(messages)
+    .set({ status: "replied", needsReply: false })
+    .where(
+      and(
+        ne(messages.userId, user.id),
+        inArray(messages.rfcMessageId, rfcIds),
+        inArray(messages.status, ["new", "draft_ready"]),
+      ),
+    )
+    .returning({ userId: messages.userId, gmailMessageId: messages.gmailMessageId });
+  for (const c of closed) {
+    await enqueue(
+      db,
+      "mark_replied",
+      { userId: c.userId, messageId: c.gmailMessageId },
+      `replied:${c.userId}:${c.gmailMessageId}`,
+    );
+  }
+  return closed.length;
+}
+
+/** 同じメール（Message-ID）を、他の人が既に返信しているか（グループ宛てで同僚が先に返信した） */
+async function repliedByColleague(db: Db, user: User, rfcMessageId: string | null): Promise<boolean> {
+  if (!rfcMessageId) return false;
+  const rows = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(and(eq(messages.rfcMessageId, rfcMessageId), ne(messages.userId, user.id), eq(messages.status, "replied")))
+    .limit(1);
+  return rows.length > 0;
 }
 
 /** 転送（Fwd: / FW: / 転送:）。Gmail では転送したメールも同じスレッドに入るが、相手への返信ではない */
@@ -105,6 +173,8 @@ const FORWARD_SUBJECT = /^\s*(fwd?|転送)\s*[:：]/i;
 export interface ProcessOptions {
   /** 過去メールの取り込みでは下書きを自動で作らない */
   autoDraft?: boolean;
+  /** 分類し直す前の状態。返信済み・下書きありは、分類し直しても戻さない */
+  keepStatus?: "replied" | "draft_ready";
 }
 
 export async function processMessage(
@@ -116,20 +186,38 @@ export async function processMessage(
   const { db, mail, classifier } = deps;
 
   const existing = await db
-    .select({ id: messages.id })
+    .select({ id: messages.id, status: messages.status })
     .from(messages)
     .where(and(eq(messages.userId, user.id), eq(messages.gmailMessageId, gmailMessageId)))
     .limit(1);
-  if (existing.length) return { kind: "skipped", reason: "already_processed" };
+  // アプリで迷惑メール・ゴミ箱にした行（skipped）は、Gmail で戻されたときだけ処理し直す
+  if (existing.length && existing[0].status !== "skipped") return { kind: "skipped", reason: "already_processed" };
 
   let raw;
   try {
     raw = await mail.getMessage(gmailMessageId);
   } catch (err) {
-    if (err instanceof MessageNotFoundError) return { kind: "skipped", reason: "not_found" };
+    if (err instanceof MessageNotFoundError) return { kind: "skipped", reason: existing.length ? "already_processed" : "not_found" };
     throw err;
   }
   const msg = parseMessage(raw);
+  if (existing.length) {
+    if (msg.labelIds.some((l) => l === "SPAM" || l === "TRASH")) return { kind: "skipped", reason: "already_processed" };
+    // Gmail の迷惑メール・ゴミ箱から戻された：古い行を消して、届いたメールとして分類し直す
+    await db.transaction(async (txRaw) => {
+      const tx = txRaw as unknown as Db;
+      await tx
+        .delete(dateCandidates)
+        .where(
+          and(
+            eq(dateCandidates.userId, user.id),
+            eq(dateCandidates.gmailMessageId, gmailMessageId),
+            eq(dateCandidates.status, "candidate"),
+          ),
+        );
+      await tx.delete(messages).where(eq(messages.id, existing[0].id));
+    });
+  }
   // 下書き（自分の下書きは From が自分なので、返信と取り違えないよう先に除く）
   if (msg.labelIds.includes("DRAFT")) return { kind: "skipped", reason: "DRAFT" };
 
@@ -189,12 +277,13 @@ export async function processMessage(
     ? { folder: "info", category: "info", secondaryFolders: stage1.secondaryFolders, source: "content", needsReview: false }
     : mergeClassification(stage1, content);
   // 返信が要ると判定されても、このメールより後に自分たちが返信していれば対応済み（過去メールの取り込みで多い）
+  // グループ宛てで同僚が既に返信したメールも対応済み（届くのが同僚の返信より後になった人の受信箱）
   let needsReply = content?.needs_reply ?? false;
-  let answered = false;
-  if (needsReply) {
-    answered = await answeredLater(mail, user, msg);
-    if (answered) needsReply = false;
+  let answered = opts.keepStatus === "replied";
+  if (needsReply && !answered) {
+    answered = (await repliedByColleague(db, user, msg.messageIdHeader)) || (await answeredLater(mail, user, msg));
   }
+  if (answered) needsReply = false;
 
   // 相手が仮予定を承諾したと読めるか（同じスレッドに「仮」の予定があるときだけ）
   let suggestConfirm = false;
@@ -215,7 +304,7 @@ export async function processMessage(
 
   // Gmail 側（ラベル）を先に付ける。途中で失敗してもジョブの再実行で最初からやり直せるよう、
   // DB への記録は最後に1つのトランザクションで行う
-  await applyLabels(mail, msg, merged, needsReply);
+  await applyLabels(mail, msg, merged, needsReply, answered);
 
   const messageRowId = await db.transaction(async (txRaw) => {
     const tx = txRaw as unknown as Db;
@@ -244,7 +333,7 @@ export async function processMessage(
       confidence: content?.confidence ?? null,
       needsReview: merged.needsReview,
       suggestConfirm,
-      status: needsReply ? "new" : answered ? "replied" : "done",
+      status: needsReply ? (opts.keepStatus === "draft_ready" ? "draft_ready" : "new") : answered ? "replied" : "done",
       unread: msg.labelIds.includes("UNREAD"),
       hasAttachments: msg.attachments.length > 0,
       receivedAt: msg.date,
@@ -305,11 +394,14 @@ async function applyLabels(
   msg: ParsedMessage,
   merged: MergedClassification,
   needsReply: boolean,
+  answered: boolean,
 ): Promise<void> {
   const labels = new LabelResolver(mail);
   const add = [await labels.folderId(merged.folder)];
   for (const f of merged.secondaryFolders) if (isFolder(f)) add.push(await labels.folderId(f));
   if (needsReply) add.push(await labels.statusId("needsReply"));
+  // 返信済みとして記録するメールには、返信を記録したときと同じく対応済のラベルを付ける
+  if (answered) add.push(await labels.statusId("done"));
   if (merged.needsReview) add.push(await labels.statusId("needsReview"));
   await mail.modifyMessage(msg.id, add, []);
 }

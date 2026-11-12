@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, lte, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "./db";
 import { dateCandidates, drafts, messages, type MessageRow, type User } from "./db/schema";
 
@@ -11,12 +11,13 @@ export interface FolderCount {
   review: number;
 }
 
+/** 左のフォルダの件数。一覧（スレッドごとに1行）・絞り込みタブと合わせてスレッドの数を数える */
 export async function folderCounts(db: Db, user: User): Promise<Map<string, FolderCount>> {
   const res = await db.execute(sql`
     select x.f as folder,
-      count(*) filter (where m.needs_reply and m.status in ('new', 'draft_ready')) as reply,
-      count(*) filter (where m.unread) as unread,
-      count(*) filter (where m.needs_review) as review
+      count(distinct m.gmail_thread_id) filter (where m.needs_reply and m.status in ('new', 'draft_ready')) as reply,
+      count(distinct m.gmail_thread_id) filter (where m.unread) as unread,
+      count(distinct m.gmail_thread_id) filter (where m.needs_review) as review
     from messages m,
       lateral (select m.folder as f union select jsonb_array_elements_text(m.secondary_folders)) x
     where m.user_id = ${user.id} and m.status not in ('skipped', 'archived')
@@ -181,11 +182,14 @@ export async function threadDrafts(db: Db, userId: number, threadId: string) {
     .orderBy(desc(drafts.createdAt), desc(drafts.id));
 }
 
-/** 受信箱の要返信の件数（ニュースレター以外。副ラベルで複数のフォルダに出るメールも1通として数える） */
+/**
+ * 受信箱の要返信の件数（ニュースレター以外）。一覧と同じくスレッドの数を数える
+ * （副ラベルで複数のフォルダに出るメールも、同じスレッドの複数のメールも1件）
+ */
 export async function totalReplyCount(db: Db, user: User): Promise<number> {
   const visible = visibleFolders(user).filter((f) => f !== "info");
   const rows = await db
-    .select({ n: sql<number>`count(*)` })
+    .select({ n: sql<number>`count(distinct ${messages.gmailThreadId})` })
     .from(messages)
     .where(
       and(
@@ -197,6 +201,24 @@ export async function totalReplyCount(db: Db, user: User): Promise<number> {
       ),
     );
   return Number(rows[0]?.n ?? 0);
+}
+
+/** 近い支払期日（今日・今週の予定に出す）。アーカイブ・迷惑メール・ゴミ箱にしたメールは出さない */
+export async function upcomingDues(db: Db, user: User, from: string, to: string): Promise<MessageRow[]> {
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.userId, user.id),
+        isNotNull(messages.dueDate),
+        gte(messages.dueDate, from),
+        lte(messages.dueDate, to),
+        sql`${messages.status} not in ('skipped', 'archived')`,
+      ),
+    )
+    .orderBy(messages.dueDate);
+  return rows.filter((m) => canSeeMessage(user, m));
 }
 
 /** 一覧からメールを開いたときの「戻る」先。自分のアプリ内の一覧だけを許す */

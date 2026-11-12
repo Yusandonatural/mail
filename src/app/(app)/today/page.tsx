@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { and, eq, gte, inArray, isNotNull, lte } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { dateCandidates, messages } from "@/lib/db/schema";
 import { requireUser } from "@/lib/session";
 import { canSeeMessage } from "@/lib/access";
+import { upcomingDues } from "@/lib/queries";
 import { calendarFor } from "@/lib/services";
 import { eventsForDays, TENTATIVE_PREFIX } from "@/lib/calendar-service";
 import type { CalendarEvent } from "@/lib/google/calendar-api";
@@ -45,20 +46,7 @@ export default async function TodayPage() {
 
   const today = jstDateString(now);
   const in14 = jstDateString(addDays(now, 14));
-  const dues = (
-    await db
-      .select()
-      .from(messages)
-      .where(
-        and(
-          eq(messages.userId, user.id),
-          isNotNull(messages.dueDate),
-          gte(messages.dueDate, today),
-          lte(messages.dueDate, in14),
-        ),
-      )
-      .orderBy(messages.dueDate)
-  ).filter((m) => canSeeMessage(user, m));
+  const dues = await upcomingDues(db, user, today, in14);
 
   const days = new Map<string, CalendarEvent[]>();
   for (const e of events) {

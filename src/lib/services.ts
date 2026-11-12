@@ -9,7 +9,7 @@ import { clientForRefreshToken } from "./google/oauth";
 import { MessageNotFoundError, type MailApi } from "./google/mail-api";
 import { LabelResolver } from "./labels";
 import type { CalendarApi } from "./google/calendar-api";
-import { processMessage } from "./pipeline";
+import { markRepliedLabels, processMessage } from "./pipeline";
 import { generateDraft } from "./drafts";
 import { collectSummaries } from "./contacts";
 import { PermanentJobError, type JobHandlers } from "./jobs";
@@ -60,7 +60,13 @@ export function jobHandlers(db: Db): JobHandlers {
           });
         }
       }
-      await processMessage(deps, user, String(p.messageId), { autoDraft: p.backfill !== true });
+      const keepStatus = p.keepStatus === "replied" || p.keepStatus === "draft_ready" ? p.keepStatus : undefined;
+      await processMessage(deps, user, String(p.messageId), { autoDraft: p.backfill !== true, keepStatus });
+    },
+    // グループ宛てのメールに同僚が返信したとき、その人の Gmail でも要返信を外す
+    mark_replied: async (p) => {
+      const user = await loadUser(db, p.userId);
+      await markRepliedLabels(mailFor(user), [String(p.messageId)]);
     },
     generate_draft: async (p) => {
       const user = await loadUser(db, p.userId);

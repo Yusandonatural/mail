@@ -30,6 +30,7 @@ describe("ジョブキュー", () => {
         },
         collect_summary_batch: noop,
         notify: noop,
+        mark_replied: noop,
       },
       5000,
     );
@@ -55,6 +56,7 @@ describe("ジョブキュー", () => {
           throw new RetryLaterError(60_000);
         },
         notify: noop,
+        mark_replied: noop,
       },
       5000,
     );

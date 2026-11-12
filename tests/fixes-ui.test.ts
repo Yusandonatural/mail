@@ -26,7 +26,8 @@ describe("受信箱", () => {
     const rows = await listMessages(db, user, { folder: null, filter: "all", page: 0 });
     expect(rows.map((r) => r.gmailMessageId)).toEqual(["sale-2", "plain", "tour"]);
     expect(rows[0]).toMatchObject({ threadCount: 2, threadUnread: true });
-    expect(await totalReplyCount(db, user)).toBe(4);
+    // 一覧と同じくスレッドの数（t3 の2通は1件）
+    expect(await totalReplyCount(db, user)).toBe(3);
     const tour = await listMessages(db, user, { folder: "tour", filter: "all", page: 0 });
     expect(tour.map((r) => r.gmailMessageId)).toEqual(["tour"]);
     const info = await listMessages(db, user, { folder: "info", filter: "all", page: 0 });
