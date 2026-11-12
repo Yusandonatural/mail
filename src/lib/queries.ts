@@ -1,8 +1,8 @@
 import { and, desc, eq, gte, inArray, isNotNull, lte, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "./db";
-import { dateCandidates, drafts, messages, type MessageRow, type User } from "./db/schema";
+import { dateCandidates, drafts, messages, rules, type MessageRow, type User } from "./db/schema";
 
-import { canSeeMessage, visibleFolders } from "./access";
+import { canSeeFolder, canSeeMessage, isAdmin, visibleFolders } from "./access";
 import type { Folder } from "./domain";
 
 export interface FolderCount {
@@ -42,6 +42,14 @@ function inFolder(folder: string): SQL {
   return or(eq(messages.folder, folder), sql`${messages.secondaryFolders} @> ${JSON.stringify([folder])}::jsonb`)!;
 }
 
+/**
+ * どれかのフォルダに入っているメール。見られるフォルダが1つも無いときは何も出さない
+ * （or() は条件が空だと undefined を返し、and() がそれを無視して全件になってしまうため）
+ */
+function anyFolder(folders: string[]): SQL {
+  return folders.length ? or(...folders.map(inFolder))! : sql`false`;
+}
+
 export interface ListedMessage extends MessageRow {
   hasDates: boolean;
   freeeSent: boolean;
@@ -63,7 +71,7 @@ function listConds(user: User, folder: Folder | null, filter: ListFilter): SQL[]
   // アーカイブ・迷惑メール・ゴミ箱にしたメールは一覧に出さない
   const conds: SQL[] = [eq(messages.userId, user.id), sql`${messages.status} not in ('skipped', 'archived')`];
   if (folder) conds.push(inFolder(folder));
-  else conds.push(or(...visible.filter((f) => f !== "info").map(inFolder))!, sql`${messages.folder} <> 'info'`);
+  else conds.push(anyFolder(visible.filter((f) => f !== "info")), sql`${messages.folder} <> 'info'`);
   if (filter === "reply") conds.push(and(eq(messages.needsReply, true), inArray(messages.status, ["new", "draft_ready"]))!);
   if (filter === "draft") conds.push(eq(messages.status, "draft_ready"));
   if (filter === "review") conds.push(eq(messages.needsReview, true));
@@ -127,6 +135,34 @@ export async function listMessages(
     threadUrgent: Boolean(r.anyUrgent),
     threadDraft: Boolean(r.anyDraft),
   }));
+}
+
+/**
+ * スレッドの中で、その人が見られないフォルダに分類されたメールの Gmail ID。
+ * メール画面はスレッド全体を Gmail から読むので、同じスレッドに後から届いた経理のメールなどを出さないために使う。
+ */
+export async function hiddenInThread(db: Db, user: User, threadId: string): Promise<Set<string>> {
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.userId, user.id), eq(messages.gmailThreadId, threadId)));
+  return new Set(rows.filter((r) => !canSeeMessage(user, r)).map((r) => r.gmailMessageId));
+}
+
+/**
+ * 一覧の操作から学習ルール（送信者・ドメイン → フォルダ／迷惑メール）を書いてよいパターン。
+ * ルールは全員の受信箱に効くので、担当者は「ルールが無い」か「自分が見られるフォルダへのルール」だけ書き換えられる。
+ * 見られないフォルダ（経理など）や迷惑メールへのルールを書き換えると、ほかの人のメールの行き先を変えたり、
+ * 見られないはずのメールを自分のフォルダへ流し込めたりするため。管理者は全て書ける。
+ */
+export async function overwritableRules(db: Db, user: User, kind: string, patterns: string[]): Promise<Set<string>> {
+  if (isAdmin(user) || !patterns.length) return new Set(patterns);
+  const existing = await db
+    .select()
+    .from(rules)
+    .where(and(eq(rules.kind, kind), inArray(rules.pattern, patterns)));
+  const locked = new Set(existing.filter((r) => !canSeeFolder(user, r.folder)).map((r) => r.pattern));
+  return new Set(patterns.filter((p) => !locked.has(p)));
 }
 
 /**
@@ -196,7 +232,7 @@ export async function totalReplyCount(db: Db, user: User): Promise<number> {
         eq(messages.userId, user.id),
         eq(messages.needsReply, true),
         inArray(messages.status, ["new", "draft_ready"]),
-        or(...visible.map(inFolder))!,
+        anyFolder(visible),
         sql`${messages.folder} <> 'info'`,
       ),
     );

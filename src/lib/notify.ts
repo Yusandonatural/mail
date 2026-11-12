@@ -18,6 +18,23 @@ export interface Notifier {
   send(sub: PushSubscriptionRow, payload: PushPayload): Promise<"ok" | "gone">;
 }
 
+/** ブラウザの通知サービス（Chrome/Edge/Firefox/Safari）のホスト */
+const PUSH_HOSTS = /(^|\.)(fcm\.googleapis\.com|android\.googleapis\.com|push\.services\.mozilla\.com|push\.apple\.com|notify\.windows\.com)$/;
+
+/**
+ * 通知の宛先として受け付ける URL か。サーバーがこの URL に POST するので、
+ * 任意の URL を登録されると内部のサービスなどへリクエストを送らされてしまう（SSRF）
+ */
+export function isPushEndpoint(endpoint: unknown): endpoint is string {
+  if (typeof endpoint !== "string") return false;
+  try {
+    const url = new URL(endpoint);
+    return url.protocol === "https:" && !url.port && !url.username && !url.password && PUSH_HOSTS.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function vapidPublicKey(): string | null {
   return process.env.VAPID_PUBLIC_KEY || null;
 }
@@ -28,6 +45,8 @@ export function pushConfigured(): boolean {
 
 export class WebPushNotifier implements Notifier {
   async send(sub: PushSubscriptionRow, payload: PushPayload): Promise<"ok" | "gone"> {
+    // 通知サービス以外の宛先（チェックを入れる前に登録されたもの）には送らず、消してもらう
+    if (!isPushEndpoint(sub.endpoint)) return "gone";
     const webpush = (await import("web-push")).default;
     webpush.setVapidDetails(
       process.env.VAPID_SUBJECT || `mailto:${(process.env.ADMIN_EMAILS ?? "").split(",")[0] || "admin@example.com"}`,

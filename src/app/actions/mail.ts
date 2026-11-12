@@ -18,7 +18,7 @@ import { draftDeps, mailFor, pipelineDeps } from "@/lib/services";
 import { getSetting } from "@/lib/settings";
 import { bodyHash } from "@/lib/crypto";
 import { requireUser } from "@/lib/session";
-import { safeBack, threadRowsOf } from "@/lib/queries";
+import { overwritableRules, safeBack, threadRowsOf } from "@/lib/queries";
 import { errorResult, ownMessage, type ActionResult } from "./common";
 
 /** フォルダを直す。「今後もこの送信者／ドメインは」を選べば学習ルールとして保存する（仕様書 4章） */
@@ -30,7 +30,14 @@ export async function moveFolder(formData: FormData): Promise<void> {
   const { user, row } = await ownMessage(rowId);
   // 画面の選択肢は見られるフォルダだけ。見られないフォルダ（経理など）への移動やルール作成はさせない
   if (!canSeeFolder(user, folder)) throw new Error("このフォルダには移動できません");
+  const pattern =
+    remember === "sender" ? row.fromEmail : remember === "domain" ? row.fromEmail.slice(row.fromEmail.indexOf("@") + 1) : null;
   const db = await getDb();
+  // ルールは全員の受信箱に効く。見られないフォルダ（経理など）や迷惑メールへのルールを担当者が書き換えて、
+  // 自分の見られるフォルダへ流し込めないようにする
+  if (pattern && !(await overwritableRules(db, user, remember, [pattern])).has(pattern)) {
+    throw new Error("この送信者には管理者が決めた振り分けルールがあるため変えられません。管理者に依頼してください");
+  }
   const mail = mailFor(user);
   const labels = new LabelResolver(mail);
 
@@ -54,8 +61,7 @@ export async function moveFolder(formData: FormData): Promise<void> {
     .where(eq(messages.id, row.id));
   await audit(db, user.id, "folder_moved", row.gmailMessageId, { from: row.folder, to: folder });
 
-  if (remember === "sender" || remember === "domain") {
-    const pattern = remember === "sender" ? row.fromEmail : row.fromEmail.slice(row.fromEmail.indexOf("@") + 1);
+  if (pattern) {
     await db
       .insert(rules)
       .values({ kind: remember, pattern, folder, createdBy: user.id })
@@ -82,12 +88,15 @@ export async function generateDraftAction(
   withSlots = false,
 ): Promise<ActionResult> {
   try {
+    // 指示はプロンプトにそのまま入るので、型と長さを確かめる（Claude の利用料が膨らまないように）
+    if (instruction !== null && typeof instruction !== "string") return { ok: false, error: "指示が正しくありません" };
+    if (instruction && instruction.length > 4000) return { ok: false, error: "指示は 4000 文字までにしてください" };
     const { user, row } = await ownMessage(rowId);
     const db = await getDb();
     const r = await generateDraft(draftDeps(db, user), user, row.gmailThreadId, row.gmailMessageId, {
       generatedBy: "manual",
       instruction: instruction?.trim() || null,
-      withSlots,
+      withSlots: withSlots === true,
     });
     if (r.kind === "skipped") return { ok: false, error: r.reason };
     await audit(db, user.id, "draft_generated", row.gmailThreadId, { instruction, kind: r.kind });
@@ -264,9 +273,12 @@ function removedThreads(selected: MessageRow[], expanded: MessageRow[], ok: numb
 async function blockSenders(user: User, rows: MessageRow[]): Promise<number> {
   const db = await getDb();
   const own = user.email.slice(user.email.indexOf("@") + 1).toLowerCase();
-  const senders = [...new Set(rows.map((r) => r.fromEmail.toLowerCase()))].filter(
+  const candidates = [...new Set(rows.map((r) => r.fromEmail.toLowerCase()))].filter(
     (e) => e.includes("@") && e.slice(e.indexOf("@") + 1) !== own,
   );
+  // 見られないフォルダ（経理など）へのルールがある送信者は、担当者が全員分を迷惑メールにはできない
+  const allowed = await overwritableRules(db, user, "sender", candidates);
+  const senders = candidates.filter((e) => allowed.has(e));
   for (const pattern of senders) {
     await db
       .insert(rules)

@@ -26,6 +26,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ messageId: 
 
   const mail = mailFor(user);
   const parsed = parseMessage(await mail.getMessage(messageId));
+  if (!row) {
+    // アプリに取り込んでいないメール（スレッド内の送信済みメールなど）は、
+    // 同じスレッドに見られるメールがあるときだけ（メール画面に出るものだけ）渡す
+    const thread = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.userId, user.id), eq(messages.gmailThreadId, parsed.threadId)));
+    if (!thread.some((r) => canSeeMessage(user, r))) return new NextResponse("not found", { status: 404 });
+  }
   const info = parsed.attachments.find((a) => a.partId === partId);
   if (!info) return new NextResponse("not found", { status: 404 });
   const data = await mail.getAttachment(messageId, info.attachmentId);

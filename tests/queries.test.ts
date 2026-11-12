@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { dateCandidates, messages } from "@/lib/db/schema";
-import { folderCounts, listMessages } from "@/lib/queries";
+import { dateCandidates, messages, rules } from "@/lib/db/schema";
+import { BLOCK_RULE } from "@/lib/domain";
+import { filterCounts, folderCounts, hiddenInThread, listMessages, overwritableRules, totalReplyCount } from "@/lib/queries";
 import { makeUser, testDb } from "./helpers/db";
 
 async function seed() {
@@ -73,6 +74,17 @@ describe("一覧の取得", () => {
     expect(rows.map((r) => r.gmailMessageId)).toEqual(["s1"]);
   });
 
+  it("見られるフォルダが無い担当者（追加した直後の既定）には何も出さない", async () => {
+    const { db } = await seed();
+    const staff = await makeUser(db, { email: "new@yusando.com", role: "staff", visibleFolders: [] });
+    await db.insert(messages).values([
+      { userId: staff.id, gmailMessageId: "k1", gmailThreadId: "t1", fromEmail: "a@b.example", folder: "keiri", needsReply: true, status: "new", source: "address", receivedAt: new Date() },
+    ]);
+    expect(await listMessages(db, staff, { folder: null, filter: "all", page: 0 })).toEqual([]);
+    expect(await filterCounts(db, staff, null)).toEqual({ reply: 0, draft: 0, review: 0 });
+    expect(await totalReplyCount(db, staff)).toBe(0);
+  });
+
   it("フォルダごとの件数を副ラベルも含めて数える", async () => {
     const { db, admin } = await seed();
     const counts = await folderCounts(db, admin);
@@ -80,5 +92,33 @@ describe("一覧の取得", () => {
     expect(counts.get("tour")).toMatchObject({ reply: 1, review: 1 });
     expect(counts.get("personal")).toMatchObject({ reply: 1 });
     expect(counts.get("keiri")).toMatchObject({ reply: 0 });
+  });
+});
+
+describe("担当者の見える範囲", () => {
+  it("スレッドの中で見られないフォルダのメールを返す（メール画面・翻訳で出さない）", async () => {
+    const { db } = await seed();
+    const staff = await makeUser(db, { email: "staff@yusando.com", role: "staff", visibleFolders: ["tour"] });
+    const base = { userId: staff.id, fromEmail: "a@b.example", source: "address", receivedAt: new Date(), gmailThreadId: "th" };
+    await db.insert(messages).values([
+      { ...base, gmailMessageId: "v1", folder: "tour" },
+      { ...base, gmailMessageId: "k1", folder: "keiri" },
+      { ...base, gmailMessageId: "k2", folder: "keiri", secondaryFolders: ["tour"] },
+    ]);
+    expect([...(await hiddenInThread(db, staff, "th"))]).toEqual(["k1"]);
+  });
+
+  it("担当者は見られないフォルダへのルールを書き換えられない", async () => {
+    const { db, admin } = await seed();
+    const staff = await makeUser(db, { email: "staff@yusando.com", role: "staff", visibleFolders: ["tour", "wholesale"] });
+    await db.insert(rules).values([
+      { kind: "domain", pattern: "bank.example", folder: "keiri" },
+      { kind: "domain", pattern: "travel.example", folder: "tour" },
+      { kind: "sender", pattern: "spam@x.example", folder: BLOCK_RULE },
+    ]);
+    const domains = ["bank.example", "travel.example", "new.example"];
+    expect([...(await overwritableRules(db, staff, "domain", domains))].sort()).toEqual(["new.example", "travel.example"]);
+    expect([...(await overwritableRules(db, staff, "sender", ["spam@x.example", "c@d.example"]))]).toEqual(["c@d.example"]);
+    expect([...(await overwritableRules(db, admin, "domain", domains))].sort()).toEqual([...domains].sort());
   });
 });

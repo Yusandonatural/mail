@@ -35,10 +35,23 @@ export function encodeHeaderWord(value: string): string {
   return chunks.map((c) => `=?UTF-8?B?${Buffer.from(c, "utf8").toString("base64")}?=`).join("\r\n ");
 }
 
+/** ヘッダーの値から改行・制御文字を取り除く（相手のヘッダーやフォームの値で別のヘッダーを差し込ませない） */
+export function headerValue(value: string): string {
+  return value.replace(/[\x00-\x1f\x7f]+/g, " ").trim();
+}
+
+/** quoted-string。\ も " もエスケープする（\ を残すと引用が閉じて、宛先を足せてしまう） */
+function quoted(value: string): string {
+  return `"${value.replace(/[\\"]/g, "\\$&")}"`;
+}
+
 export function formatAddress(a: Address): string {
-  if (!a.name) return a.email;
-  const name = ASCII_PRINTABLE.test(a.name) ? `"${a.name.replace(/"/g, '\\"')}"` : encodeHeaderWord(a.name);
-  return `${name} <${a.email}>`;
+  // アドレス部分に空白・改行・区切り文字は入らない。入っていたら取り除く
+  const email = a.email.replace(/[\s<>,;"\x00-\x1f\x7f]/g, "");
+  if (!a.name) return email;
+  const plain = headerValue(a.name);
+  const name = ASCII_PRINTABLE.test(plain) ? quoted(plain) : encodeHeaderWord(plain);
+  return `${name} <${email}>`;
 }
 
 export function replySubject(subject: string): string {
@@ -62,9 +75,11 @@ export function buildMime(input: MimeInput): string {
   if (input.to.length) headers.push(`To: ${input.to.map(formatAddress).join(", ")}`);
   if (input.cc?.length) headers.push(`Cc: ${input.cc.map(formatAddress).join(", ")}`);
   headers.push(`Subject: ${encodeHeaderWord(input.subject)}`);
-  if (input.inReplyTo) headers.push(`In-Reply-To: ${input.inReplyTo}`);
-  if (input.references || input.inReplyTo) {
-    const refs = [input.references, input.inReplyTo].filter(Boolean).join(" ").trim();
+  // In-Reply-To・References は相手のメールのヘッダーから来る
+  const inReplyTo = input.inReplyTo ? headerValue(input.inReplyTo) : "";
+  if (inReplyTo) headers.push(`In-Reply-To: ${inReplyTo}`);
+  if (input.references || inReplyTo) {
+    const refs = headerValue([input.references, inReplyTo].filter(Boolean).join(" "));
     headers.push(`References: ${refs}`);
   }
   const textPart = [
@@ -81,11 +96,14 @@ export function buildMime(input: MimeInput): string {
   headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
   const parts = [textPart];
   for (const a of input.attachments) {
-    const name = encodeHeaderWord(a.filename);
+    // 転送する添付の名前と形式は相手のメールから来るので、引用を閉じたり改行を入れたりできないようにする
+    const filename = headerValue(a.filename);
+    const name = ASCII_PRINTABLE.test(filename) ? quoted(filename) : `"${encodeHeaderWord(filename)}"`;
+    const mimeType = /^[\w.+-]+\/[\w.+-]+$/.test(a.mimeType) ? a.mimeType : "application/octet-stream";
     parts.push(
       [
-        `Content-Type: ${a.mimeType}; name="${name}"`,
-        `Content-Disposition: attachment; filename="${name}"`,
+        `Content-Type: ${mimeType}; name=${name}`,
+        `Content-Disposition: attachment; filename=${name}`,
         "Content-Transfer-Encoding: base64",
         "",
         base64Lines(a.data),

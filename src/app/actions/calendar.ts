@@ -3,8 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { dateCandidates } from "@/lib/db/schema";
+import { dateCandidates, messages } from "@/lib/db/schema";
 import { audit } from "@/lib/audit";
+import { canSeeMessage } from "@/lib/access";
 import { confirmCandidate, createEventFromCandidate } from "@/lib/calendar-service";
 import { calendarFor } from "@/lib/services";
 import { requireUser } from "@/lib/session";
@@ -20,6 +21,15 @@ async function ownCandidate(id: number) {
       .limit(1)
   )[0];
   if (!c) throw new Error("日程候補が見つかりません");
+  // 候補は見られないフォルダのメールにも作られる。予定の説明に要約が入るので、元のメールを見られる人だけにする
+  const row = (
+    await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.userId, user.id), eq(messages.gmailMessageId, c.gmailMessageId)))
+      .limit(1)
+  )[0];
+  if (!row || !canSeeMessage(user, row)) throw new Error("日程候補が見つかりません");
   return { user, db, c };
 }
 

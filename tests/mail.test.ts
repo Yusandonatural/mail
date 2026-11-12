@@ -84,6 +84,27 @@ describe("MIME の生成", () => {
     expect(raw).toContain("multipart/mixed");
     expect(raw).toContain("Content-Disposition: attachment");
   });
+  it("相手のヘッダーやフォームの値で、ヘッダーや宛先を差し込ませない", () => {
+    const raw = buildMime({
+      // 表示名の \ で引用を閉じて宛先を足す・アドレスの改行で Bcc を足す
+      to: [
+        { name: 'x\\", evil@attacker.example, "y', email: "buyer@shop.example" },
+        { name: null, email: "a@b.c\r\nBcc: spy@attacker.example" },
+      ],
+      subject: "件名\r\nBcc: spy@attacker.example",
+      text: "本文",
+      inReplyTo: "<abc@x>\r\nBcc: spy@attacker.example",
+      attachments: [
+        { filename: 'a".html\r\nX-Evil: 1', mimeType: "text/html\r\nX-Evil: 1", data: Buffer.from("x") },
+      ],
+    });
+    const headerLines = raw.split("\r\n").filter((l) => /^[A-Za-z-]+:/.test(l)).map((l) => l.split(":")[0].toLowerCase());
+    expect(headerLines).not.toContain("bcc");
+    expect(headerLines).not.toContain("x-evil");
+    expect(raw).toContain('To: "x\\\\\\", evil@attacker.example, \\"y" <buyer@shop.example>');
+    expect(raw).toContain("Content-Type: application/octet-stream;");
+    expect(raw).toContain('filename="a\\".html X-Evil: 1"');
+  });
 });
 
 describe("【要確認】の検出", () => {

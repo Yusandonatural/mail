@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { jobs, pushSubscriptions, type PushSubscriptionRow } from "@/lib/db/schema";
-import { notifyUser, type Notifier, type PushPayload } from "@/lib/notify";
+import { isPushEndpoint, notifyUser, WebPushNotifier, type Notifier, type PushPayload } from "@/lib/notify";
 import { processMessage } from "@/lib/pipeline";
 import { putSetting } from "@/lib/settings";
 import type { Classifier, ContentClassification } from "@/lib/classify/types";
@@ -66,5 +66,26 @@ describe("通知", () => {
     expect(sent).toHaveLength(2);
     const left = await db.select().from(pushSubscriptions);
     expect(left.map((s) => s.endpoint)).toEqual(["https://push.example/ok"]);
+  });
+});
+
+describe("通知の宛先", () => {
+  it("ブラウザの通知サービスの URL だけを受け付ける（任意の URL に POST させない）", async () => {
+    expect(isPushEndpoint("https://fcm.googleapis.com/fcm/send/abc")).toBe(true);
+    expect(isPushEndpoint("https://updates.push.services.mozilla.com/wpush/v2/abc")).toBe(true);
+    expect(isPushEndpoint("https://web.push.apple.com/abc")).toBe(true);
+    expect(isPushEndpoint("https://wns2-par02p.notify.windows.com/w/?token=abc")).toBe(true);
+    expect(isPushEndpoint("https://metadata.google.internal/computeMetadata/v1/")).toBe(false);
+    expect(isPushEndpoint("https://fcm.googleapis.com.evil.example/x")).toBe(false);
+    expect(isPushEndpoint("https://evilfcm.googleapis.com.example/x")).toBe(false);
+    expect(isPushEndpoint("https://fcm.googleapis.com:8443/x")).toBe(false);
+    expect(isPushEndpoint("http://fcm.googleapis.com/x")).toBe(false);
+    expect(isPushEndpoint({ toString: () => "https://fcm.googleapis.com/" })).toBe(false);
+    // 以前に登録された通知サービス以外の宛先には送らず、消す扱いにする
+    const r = await new WebPushNotifier().send(
+      { id: 1, userId: 1, endpoint: "https://internal.example/hook", p256dh: "k", auth: "a" } as PushSubscriptionRow,
+      { title: "t", body: "b", url: "/inbox", tag: "x" },
+    );
+    expect(r).toBe("gone");
   });
 });

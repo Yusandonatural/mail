@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { contacts, drafts, messages, rules } from "@/lib/db/schema";
 import { requireUser } from "@/lib/session";
-import { canSeeMessage, visibleFolders } from "@/lib/access";
+import { canSeeMessage, isAdmin, visibleFolders } from "@/lib/access";
 import {
   CATEGORY_LABELS,
   DATE_KIND_LABELS,
@@ -18,7 +18,7 @@ import {
 } from "@/lib/domain";
 import { calendarFor, mailFor } from "@/lib/services";
 import { parseMessage, type ParsedMessage } from "@/lib/mail/parse";
-import { safeBack, threadCandidates, threadDrafts } from "@/lib/queries";
+import { hiddenInThread, safeBack, threadCandidates, threadDrafts } from "@/lib/queries";
 import { defaultEdits, eventsForDays, gmailThreadLink } from "@/lib/calendar-service";
 import { formatJst, jstIso, parseDateish } from "@/lib/time";
 import { adoptGmailDrafts, draftText } from "@/lib/drafts";
@@ -78,7 +78,9 @@ export default async function MessagePage({
     mail = mailFor(user);
     calendar = calendarFor(user);
     const all = ((await mail.getThread(row.gmailThreadId)).messages ?? []).map(parseMessage);
-    thread = all.filter((m) => !m.labelIds.includes("DRAFT"));
+    // 同じスレッドでも、見られないフォルダ（経理など）に分類されたメールは出さない
+    const hidden = await hiddenInThread(db, user, row.gmailThreadId);
+    thread = all.filter((m) => !m.labelIds.includes("DRAFT") && !hidden.has(m.id));
     // Claude のスキルや Gmail の画面で作った下書きがあれば、下書き欄に出せるよう取り込む
     if (all.some((m) => m.labelIds.includes("DRAFT"))) {
       await adoptGmailDrafts(db, mail, user, row.gmailThreadId).catch((e) => console.error("adopt drafts failed", e));
@@ -461,7 +463,8 @@ export default async function MessagePage({
             <div className="meta">
               {row.fromName ? `${row.fromName} ` : ""}&lt;{row.fromEmail}&gt;
             </div>
-            {contact?.lastSummary ? <div className="notes" style={{ marginTop: 8 }}>{contact.lastSummary}</div> : null}
+            {/* 夜間の要約は、ほかの人の受信箱（見られないフォルダを含む）のメールから作られるので管理者にだけ出す */}
+            {contact?.lastSummary && isAdmin(user) ? <div className="notes" style={{ marginTop: 8 }}>{contact.lastSummary}</div> : null}
             {senderRules.length ? (
               <div className="meta" style={{ marginTop: 8 }}>
                 適用中の振り分けルール：
