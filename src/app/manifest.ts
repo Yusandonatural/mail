@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     short_name: "悠三堂メール",
     start_url: "/inbox",
     display: "standalone",
-    background_color: "#f7f5f0",
-    theme_color: "#3f6b3a",
+    background_color: "#f5f6f8",
+    theme_color: "#ffffff",
     lang: "ja",
     icons: [
       { src: "/icon-192.png", sizes: "192x192", type: "image/png" },

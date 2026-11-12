@@ -564,7 +564,10 @@ details > summary::marker { color: var(--accent); }
   .sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; gap: 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; }
   .sidebar > * { grid-column: 1 / -1; }
   .brand { margin: 0 2px; grid-column: 1; grid-row: 1; }
-  .compose-link { position: fixed; right: 16px; bottom: calc(20px + env(safe-area-inset-bottom)); z-index: 20; margin: 0; padding: 12px 18px; box-shadow: 0 8px 24px rgb(47 111 237 / 0.35); }
+  /* 丸いペンのボタンだけにして、一覧の文字を隠しにくくする（文字は読み上げ用に残す） */
+  .compose-link { position: fixed; right: 16px; bottom: calc(20px + env(safe-area-inset-bottom)); z-index: 20; margin: 0; width: 54px; height: 54px; padding: 0; border-radius: 50%; box-shadow: 0 8px 24px rgb(47 111 237 / 0.35); }
+  .compose-link .nav-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .compose-link .icon { width: 22px; height: 22px; }
   /* 新規作成の画面と、メールを読んで返信する画面では、浮かせたボタンで本文を隠さない */
   .compose-link.active, .app:has(.detail) .compose-link { display: none; }
   .nav { flex-direction: row; gap: 4px; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
