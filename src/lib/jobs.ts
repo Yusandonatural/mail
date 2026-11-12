@@ -1,7 +1,8 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "./db";
 import { jobs } from "./db/schema";
-import { ClaudeRefusalError } from "./claude/client";
+import { ClaudeRefusalError, isRetryableApiError } from "./claude/client";
+import { isGooglePermanent, isGoogleTransient } from "./google/errors";
 
 export type JobKind = "process_message" | "generate_draft" | "collect_summary_batch" | "notify" | "mark_replied";
 
@@ -23,6 +24,17 @@ export class RetryLaterError extends Error {
 }
 
 const MAX_ATTEMPTS = 5;
+/**
+ * Claude の混雑（429/529）や Gmail の使いすぎ・一時的な障害は数時間続くことがあるので、
+ * 間隔を最大 1 時間まで延ばしながら長めに（合計およそ 5 時間）やり直す。すぐ諦めると自動の下書きが失われる
+ */
+const MAX_TRANSIENT_ATTEMPTS = 10;
+const MAX_BACKOFF_MS = 60 * 60 * 1000;
+
+/** 時間をおけば通る失敗か（Claude・Google の混雑や一時的な障害） */
+export function isTransientError(err: unknown): boolean {
+  return isRetryableApiError(err) || isGoogleTransient(err);
+}
 
 export async function enqueue(
   db: Db,
@@ -51,8 +63,16 @@ export async function claimNext(db: Db, now: Date = new Date()): Promise<Claimed
     update jobs set status = 'running', locked_at = ${now.toISOString()}::timestamptz, attempts = attempts + 1
     where id = (
       select id from jobs
-      where (status = 'pending' and run_after <= ${now.toISOString()}::timestamptz)
-         or (status = 'running' and locked_at < ${stale.toISOString()}::timestamptz)
+      where ((status = 'pending' and run_after <= ${now.toISOString()}::timestamptz)
+         or (status = 'running' and locked_at < ${stale.toISOString()}::timestamptz))
+        -- 同じスレッドの下書きを2つの処理（push と cron など）が同時に作ると、Gmail に下書きが2つできる。
+        -- 実行中のものがあれば、終わるまで待つ
+        and not (kind = 'generate_draft' and exists (
+          select 1 from jobs r
+          where r.kind = 'generate_draft' and r.status = 'running' and r.id <> jobs.id
+            and r.locked_at >= ${stale.toISOString()}::timestamptz
+            and r.payload->>'userId' = jobs.payload->>'userId'
+            and r.payload->>'threadId' = jobs.payload->>'threadId'))
       -- 新しく届いたメールを、過去メールの取り込みより先に処理する
       order by (payload ? 'backfill') , run_after, id
       limit 1
@@ -69,7 +89,7 @@ export async function claimNext(db: Db, now: Date = new Date()): Promise<Claimed
   };
 }
 
-export type JobHandlers = Record<JobKind, (payload: Record<string, unknown>) => Promise<void>>;
+export type JobHandlers = Record<JobKind, (payload: Record<string, unknown>, job: ClaimedJob) => Promise<void>>;
 
 export async function finishJob(db: Db, id: number): Promise<void> {
   await db.execute(sql`update jobs set status = 'done', locked_at = null, last_error = null where id = ${id}`);
@@ -77,14 +97,16 @@ export async function finishJob(db: Db, id: number): Promise<void> {
 
 export async function failJob(db: Db, job: ClaimedJob, err: unknown, now: Date = new Date()): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
-  const permanent = err instanceof PermanentJobError || err instanceof ClaudeRefusalError;
-  if (permanent || job.attempts >= MAX_ATTEMPTS) {
+  // Gmail の 404（メールが消えた）・403（権限が足りない）なども、やり直しても通らない
+  const permanent = err instanceof PermanentJobError || err instanceof ClaudeRefusalError || isGooglePermanent(err);
+  const maxAttempts = isTransientError(err) ? MAX_TRANSIENT_ATTEMPTS : MAX_ATTEMPTS;
+  if (permanent || job.attempts >= maxAttempts) {
     await db.execute(
       sql`update jobs set status = 'failed', locked_at = null, last_error = ${message} where id = ${job.id}`,
     );
     return;
   }
-  const retryAt = new Date(now.getTime() + 2 ** job.attempts * 60 * 1000);
+  const retryAt = new Date(now.getTime() + Math.min(MAX_BACKOFF_MS, 2 ** job.attempts * 60 * 1000));
   await db.execute(sql`
     update jobs set status = 'pending', locked_at = null, last_error = ${message},
       run_after = ${retryAt.toISOString()}::timestamptz
@@ -99,7 +121,7 @@ export async function runJobs(db: Db, handlers: JobHandlers, budgetMs: number): 
     const job = await claimNext(db);
     if (!job) break;
     try {
-      await handlers[job.kind](job.payload);
+      await handlers[job.kind](job.payload, job);
       await finishJob(db, job.id);
     } catch (err) {
       if (err instanceof RetryLaterError) {
@@ -120,4 +142,14 @@ export async function rescheduleJob(db: Db, id: number, runAfter: Date): Promise
     update jobs set status = 'pending', locked_at = null, attempts = 0,
       run_after = ${runAfter.toISOString()}::timestamptz
     where id = ${id}`);
+}
+
+/**
+ * Google にログインし直した利用者の、保留していたジョブ（連携が切れている間に後ろへずらしたもの）をすぐ動かす
+ */
+export async function resumeUserJobs(db: Db, userId: number, now: Date = new Date()): Promise<void> {
+  await db.execute(sql`
+    update jobs set run_after = ${now.toISOString()}::timestamptz
+    where status = 'pending' and run_after > ${now.toISOString()}::timestamptz
+      and payload->>'userId' = ${String(userId)}`);
 }

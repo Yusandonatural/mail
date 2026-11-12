@@ -169,7 +169,9 @@ export async function generateDraft(
       await db.update(drafts).set({ status: "discarded" }).where(eq(drafts.id, previous.id));
     } else {
       previousText = draftText(parseMessage(current.message));
-      humanEdited = bodyHash(previousText) !== previous.bodyHash;
+      // Gmail で作られた下書き（人や Claude のスキルが書いたもの）は、取り込んだ時点の本文と同じでも人が書いたもの。
+      // 作り直しで上書きして消さないよう、人が直した下書きと同じく別案として並べる
+      humanEdited = previous.generatedBy === "gmail" || bodyHash(previousText) !== previous.bodyHash;
       // 同じメールへの下書きがあれば自動では作り直さない。相手から新しいメールが届いていれば、それに合わせて作り直す
       if (opts.generatedBy === "auto" && previous.replyToMessageId === target.id) {
         return { kind: "skipped", reason: "下書きが既にあります" };

@@ -48,26 +48,46 @@ export async function syncUser(db: Db, mail: MailApi, user: User): Promise<numbe
     await db.update(users).set({ historyId: profile.historyId }).where(eq(users.id, user.id));
     return 0;
   }
+  let startHistoryId = user.historyId;
   try {
-    const changes = await mail.listHistory(user.historyId);
-    const { messageIds, readIds, restoredIds = [], historyId } = changes;
-    let n = await enqueueMessages(db, user, messageIds);
-    // Gmail の迷惑メールなどから人が戻したメール。届いたときのジョブは「飛ばした」で終わっているので別のキーで積む
-    // （既に一覧にあるメールは processMessage が二重に作らない）
-    const added = new Set(messageIds);
-    for (const id of restoredIds) {
-      if (added.has(id)) continue;
-      if (await enqueue(db, "process_message", { userId: user.id, messageId: id }, `restore:${user.id}:${id}:${historyId}`)) n++;
+    // push と cron が同じ人を同時に同期することがある。履歴 ID を読み直して、先に進んだ方から続きを読む
+    for (let round = 0; round < 3; round++) {
+      const changes = await mail.listHistory(startHistoryId);
+      const result = await db.transaction(async (txRaw) => {
+        const tx = txRaw as unknown as Db;
+        // 同時に走った同期が先に履歴を進めていれば、ここで読んだ変更（古い範囲）は反映しない。
+        // 反映すると、後から来た古い変更で新しい状態（受信トレイに戻した・既読にした など）を上書きし、
+        // 履歴 ID も巻き戻ってしまう。ロックは同期が終わるまで持つ（もう一方は終わるのを待ってから読み直す）
+        const [current] = await tx
+          .select({ historyId: users.historyId })
+          .from(users)
+          .where(eq(users.id, user.id))
+          .for("update");
+        if (current?.historyId !== startHistoryId) return { movedTo: current?.historyId ?? null };
+        const { messageIds, readIds, restoredIds = [], historyId } = changes;
+        let n = await enqueueMessages(tx, user, messageIds);
+        // Gmail の迷惑メールなどから人が戻したメール。届いたときのジョブは「飛ばした」で終わっているので別のキーで積む
+        // （既に一覧にあるメールは processMessage が二重に作らない）
+        const added = new Set(messageIds);
+        for (const id of restoredIds) {
+          if (added.has(id)) continue;
+          if (await enqueue(tx, "process_message", { userId: user.id, messageId: id }, `restore:${user.id}:${id}:${historyId}`)) n++;
+        }
+        if (readIds.length) {
+          await tx
+            .update(messages)
+            .set({ unread: false })
+            .where(and(eq(messages.userId, user.id), inArray(messages.gmailMessageId, readIds)));
+        }
+        await applyGmailChanges(tx, mail, user, changes);
+        await tx.update(users).set({ historyId }).where(eq(users.id, user.id));
+        return { queued: n };
+      });
+      if (result.queued !== undefined) return result.queued;
+      if (!result.movedTo) return 0;
+      startHistoryId = result.movedTo;
     }
-    if (readIds.length) {
-      await db
-        .update(messages)
-        .set({ unread: false })
-        .where(and(eq(messages.userId, user.id), inArray(messages.gmailMessageId, readIds)));
-    }
-    await applyGmailChanges(db, mail, user, changes);
-    await db.update(users).set({ historyId }).where(eq(users.id, user.id));
-    return n;
+    return 0;
   } catch (err) {
     if (!(err instanceof HistoryExpiredError)) throw err;
     // 履歴が古すぎる：直近2日分を拾い直す（処理済みは重複キーで弾かれる）

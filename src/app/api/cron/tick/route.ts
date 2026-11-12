@@ -5,7 +5,8 @@ import { users } from "@/lib/db/schema";
 import { config } from "@/lib/config";
 import { cronAuthorized } from "@/lib/cron-auth";
 import { runJobs } from "@/lib/jobs";
-import { jobHandlers, mailFor } from "@/lib/services";
+import { jobHandlers, mailFor, markGoogleDisconnected } from "@/lib/services";
+import { isInvalidGrant } from "@/lib/google/errors";
 import { ensureWatch, syncUser } from "@/lib/sync";
 import { adoptGmailDrafts } from "@/lib/drafts";
 
@@ -43,6 +44,12 @@ export async function POST(req: NextRequest) {
       });
       results[user.email] = `queued ${queued}, drafts adopted ${adopted}`;
     } catch (err) {
+      // リフレッシュトークンが無効：連携を外して次から飛ばし、画面でログインし直すよう知らせる
+      if (isInvalidGrant(err)) {
+        await markGoogleDisconnected(db, user).catch((e) => console.error("mark disconnected failed", user.email, e));
+        results[user.email] = "error: Google の連携が切れています（ログインし直しが必要）";
+        continue;
+      }
       console.error("tick failed for", user.email, err);
       results[user.email] = `error: ${err instanceof Error ? err.message : String(err)}`;
     }

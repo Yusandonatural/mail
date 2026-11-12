@@ -4,7 +4,8 @@ import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { verifyPubSubToken } from "@/lib/google/oauth";
 import { runJobs } from "@/lib/jobs";
-import { jobHandlers, mailFor } from "@/lib/services";
+import { jobHandlers, mailFor, markGoogleDisconnected } from "@/lib/services";
+import { isInvalidGrant } from "@/lib/google/errors";
 import { syncUser } from "@/lib/sync";
 
 export const maxDuration = 300;
@@ -30,7 +31,15 @@ export async function POST(req: NextRequest) {
   const user = (await db.select().from(users).where(eq(users.email, email)).limit(1))[0];
   if (!user || !user.active || !user.refreshTokenEnc) return new NextResponse(null, { status: 204 });
 
-  await syncUser(db, mailFor(user), user);
+  try {
+    await syncUser(db, mailFor(user), user);
+  } catch (err) {
+    // 失敗しても 204 を返す（500 を返すと Pub/Sub が送り直し続ける）。履歴 ID は進んでいないので、
+    // 次の通知か 5 分ごとの cron が同じ範囲から読み直す。トークンが無効なら連携を外してログインし直してもらう
+    if (isInvalidGrant(err)) await markGoogleDisconnected(db, user);
+    else console.error("push sync failed for", user.email, err);
+    return new NextResponse(null, { status: 204 });
+  }
   // 重い処理（下書き生成）が残っても、次の通知か 5 分ごとの cron で続きを行う
   await runJobs(db, jobHandlers(db), 20_000);
   return new NextResponse(null, { status: 204 });

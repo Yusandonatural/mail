@@ -9,6 +9,7 @@ import { createSession, takeOAuthState } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { mailFor } from "@/lib/services";
 import { ensureWatch, syncUser } from "@/lib/sync";
+import { resumeUserJobs } from "@/lib/jobs";
 
 function fail(message: string) {
   const url = new URL("/login", config().APP_BASE_URL);
@@ -49,6 +50,9 @@ export async function GET(req: NextRequest) {
     })
     .where(eq(users.id, user.id))
     .returning();
+
+  // 連携が切れている間に後ろへずらしていたジョブを、次の cron ですぐ動かす
+  if (login.refreshToken) await resumeUserJobs(db, user.id).catch((err) => console.error("resume jobs failed", err));
 
   try {
     const mail = mailFor(user);

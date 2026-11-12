@@ -192,6 +192,11 @@ export interface ProcessOptions {
   autoDraft?: boolean;
   /** 分類し直す前の状態。返信済み・下書きありは、分類し直しても戻さない */
   keepStatus?: "replied" | "draft_ready";
+  /**
+   * Claude の混雑・一時的な障害でも、ジョブをやり直さずに「要確認」で取り込む（何度かやり直した後）。
+   * 混雑が何時間も続いてもメールが一覧に出るように。直った後は「分類し直す」で分類できる
+   */
+  fallbackOnBusy?: boolean;
 }
 
 export async function processMessage(
@@ -283,8 +288,8 @@ export async function processMessage(
           stage1Folder: stage1.folder,
         });
       } catch (err) {
-        // 混雑（429）や一時的な障害はジョブごと後でやり直す。それ以外は要確認として置く
-        if (isRetryableApiError(err)) throw err;
+        // 混雑（429/529）や一時的な障害はジョブごと後でやり直す。それ以外（と、やり直しても通らないとき）は要確認として置く
+        if (isRetryableApiError(err) && !opts.fallbackOnBusy) throw err;
         console.error("classification failed", gmailMessageId, err);
         await recordClaudeResult(db, describeClaudeError(err)).catch(() => undefined);
         content = null;
@@ -326,6 +331,18 @@ export async function processMessage(
   // DB への記録は最後に1つのトランザクションで行う
   await applyLabels(mail, msg, merged, needsReply, answered);
 
+  // 見られないフォルダのメールには、その人の受信箱で下書きを作らない。過去メールの取り込みでは下書きも通知も出さない
+  const visible = canSeeMessage(user, { folder: merged.folder, secondaryFolders: merged.secondaryFolders });
+  const live = needsReply && visible && opts.autoDraft !== false;
+  const autoDraft = live ? await getSetting(db, "autoDraft") : null;
+  const key: Folder = merged.category ?? merged.folder;
+  const wantDraft = Boolean(autoDraft && (autoDraft[key] ?? true));
+  // 通知：既定は「至急の要返信」だけ
+  const notify = live ? await getSetting(db, "notify") : null;
+  const urgent = content?.urgency === "high";
+  const wantNotify = Boolean(notify && (notify.mode === "replies" || (notify.mode === "urgent" && urgent)));
+  let draftQueued = false;
+
   const messageRowId = await db.transaction(async (txRaw) => {
     const tx = txRaw as unknown as Db;
     const inserted = await tx
@@ -364,47 +381,36 @@ export async function processMessage(
     await saveDateCandidates(tx, user, msg, content);
     // ニュースレターの送り主は連絡先に入れない（夜間の要約の対象を業務の相手に絞る）
     if (merged.folder !== "info") await upsertContact(tx, msg);
-    return inserted[0].id;
-  });
-  if (messageRowId === null) return { kind: "skipped", reason: "already_processed" };
-
-  let draftQueued = false;
-  // 見られないフォルダのメールには、その人の受信箱で下書きを作らない
-  const visible = canSeeMessage(user, { folder: merged.folder, secondaryFolders: merged.secondaryFolders });
-  if (needsReply && visible && opts.autoDraft !== false) {
-    const autoDraft = await getSetting(db, "autoDraft");
-    const key: Folder = merged.category ?? merged.folder;
-    if (autoDraft[key] ?? true) {
+    const rowId = inserted[0].id;
+    // 下書き・通知のジョブも同じトランザクションで積む。行だけ残ってジョブを積めずに落ちると、
+    // やり直しは「処理済み」で終わるので、自動の下書きも通知も失われる
+    if (wantDraft) {
       // グループ宛てで複数人に届いたメールは、最初に処理した1人の受信箱にだけ自動で下書きを作る
       const dedupe = msg.messageIdHeader ? `draft:rfc:${msg.messageIdHeader}` : `draft:${user.id}:${msg.id}`;
       draftQueued = await enqueue(
-        db,
+        tx,
         "generate_draft",
         { userId: user.id, threadId: msg.threadId, messageId: msg.id, generatedBy: "auto" },
         dedupe,
       );
     }
-  }
-
-  // 通知：既定は「至急の要返信」だけ。過去メールの取り込みでは鳴らさない
-  if (needsReply && visible && opts.autoDraft !== false) {
-    const notify = await getSetting(db, "notify");
-    const urgent = content?.urgency === "high";
-    if (notify.mode === "replies" || (notify.mode === "urgent" && urgent)) {
+    if (wantNotify) {
       await enqueue(
-        db,
+        tx,
         "notify",
         {
           userId: user.id,
-          title: `${urgent ? "【至急】" : ""}${msg.from.name || msg.from.email}`,
+          title: `${urgent ? "【至急】" : ""}${from.name || from.email}`,
           body: content?.summary || msg.subject,
-          url: `/m/${messageRowId}`,
-          tag: `msg-${messageRowId}`,
+          url: `/m/${rowId}`,
+          tag: `msg-${rowId}`,
         },
         `notify:${user.id}:${msg.id}`,
       );
     }
-  }
+    return rowId;
+  });
+  if (messageRowId === null) return { kind: "skipped", reason: "already_processed" };
 
   return { kind: "classified", messageRowId, merged, draftQueued };
 }

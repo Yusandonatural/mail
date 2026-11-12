@@ -80,6 +80,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </div>
       </aside>
       <main className="main">
+        {!user.refreshTokenEnc ? (
+          <div className="banner error" role="alert">
+            <strong>Google との連携が切れています。</strong>
+            <span>
+              新しいメールの取り込みと下書きの作成が止まっています。 <a href="/api/auth/login">Google でログインし直す</a>
+            </span>
+          </div>
+        ) : null}
         {claudeFailure ? (
           <div className="banner error" role="alert">
             <strong>Claude で分類できていません。</strong>
