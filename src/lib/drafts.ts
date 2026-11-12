@@ -16,6 +16,8 @@ import { isMostlyJapanese } from "./translate";
 import type { ShopInfo } from "./shopify";
 import type { DraftTools } from "./claude/drafter";
 import { PermanentJobError } from "./jobs";
+import { hiddenInThread } from "./queries";
+import { isAdmin } from "./access";
 
 export interface DraftDeps {
   db: Db;
@@ -126,15 +128,26 @@ export async function generateDraft(
 ): Promise<GenerateResult> {
   const { db, mail, drafter } = deps;
   const thread = await mail.getThread(threadId);
-  const parsed = (thread.messages ?? []).map(parseMessage).filter((m) => !m.labelIds.includes("DRAFT"));
+  // メール画面と同じく、見られないフォルダ（経理など）に分類されたメールは Claude にも渡さない（返信先にもしない）
+  const hidden = await hiddenInThread(db, user, threadId);
+  const parsed = (thread.messages ?? [])
+    .map(parseMessage)
+    .filter((m) => !m.labelIds.includes("DRAFT") && !hidden.has(m.id));
   if (!parsed.length) throw new PermanentJobError("スレッドが見つかりません");
   const businessAddresses = new Set(
     (await db.query.addressMap.findMany()).map((a) => a.address.toLowerCase()),
   );
-  // 自分が送ったもの、または会社の用途別アドレスから（別の担当者が）送ったもの
-  const isOurs = (m: ParsedMessage) =>
-    m.labelIds.includes("SENT") ||
-    (Boolean(m.from) && (m.from!.email === user.email.toLowerCase() || businessAddresses.has(m.from!.email)));
+  // 自分が送ったもの、または会社の用途別アドレスから（別の担当者が）送ったもの。
+  // ただし Google グループが From を書き換えたメール（From: 「〇〇 via 茶ツアー」<tour@…>、Reply-To: お客様）は相手のメール
+  const isOurs = (m: ParsedMessage) => {
+    if (m.labelIds.includes("SENT")) return true;
+    if (!m.from) return false;
+    const self = user.email.toLowerCase();
+    if (m.from.email === self) return true;
+    if (!businessAddresses.has(m.from.email)) return false;
+    const rt = m.replyTo?.email.toLowerCase();
+    return !rt || rt === self || businessAddresses.has(rt);
+  };
   // 指定されたメールが自分たちの送ったものなら、自分宛ての返信にならないよう最後の相手からのメールにする
   const requested = parsed.find((m) => m.id === replyToMessageId);
   const target = (requested && !isOurs(requested) ? requested : null) ?? [...parsed].reverse().find((m) => !isOurs(m)) ?? null;
@@ -213,7 +226,8 @@ export async function generateDraft(
     senderName: replyTo.name ?? target.from.name,
     knownContact,
     contactNotes: contact?.notes ?? "",
-    contactSummary: contact?.lastSummary ?? "",
+    // 夜間の要約はほかの人の受信箱（見られないフォルダを含む）から作るので、メール画面と同じく管理者の下書きにだけ使う
+    contactSummary: isAdmin(user) ? (contact?.lastSummary ?? "") : "",
     signature,
     senderEmail: replyTo.email,
     thread: threadForDraft,
