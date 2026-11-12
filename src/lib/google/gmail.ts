@@ -2,16 +2,13 @@ import { gmail, type gmail_v1 } from "@googleapis/gmail";
 import type { OAuth2Client } from "google-auth-library";
 import { decodeBase64Url, type Address } from "../mail/parse";
 import { toBase64Url } from "../mail/mime";
-import { HistoryExpiredError, MessageNotFoundError, type DraftRef, type MailApi } from "./mail-api";
+import { HistoryExpiredError, MessageNotFoundError, summarizeHistory, type DraftRef, type MailApi } from "./mail-api";
 
 function status(err: unknown): number | undefined {
   const e = err as { code?: number | string; status?: number; response?: { status?: number } };
   const code = typeof e.code === "number" ? e.code : Number(e.code);
   return e.status ?? e.response?.status ?? (Number.isFinite(code) ? code : undefined);
 }
-
-/** 届いたときに処理を飛ばすラベル（pipeline の SKIP_LABELS）。外されたら改めて処理する */
-const RESTORE_LABELS = new Set(["SPAM", "TRASH", "CATEGORY_PROMOTIONS"]);
 
 export class GoogleMailApi implements MailApi {
   private api: gmail_v1.Gmail;
@@ -41,9 +38,7 @@ export class GoogleMailApi implements MailApi {
   }
 
   async listHistory(startHistoryId: string) {
-    const ids = new Set<string>();
-    const readIds = new Set<string>();
-    const restoredIds = new Set<string>();
+    const history: gmail_v1.Schema$History[] = [];
     let pageToken: string | undefined;
     let historyId = startHistoryId;
     try {
@@ -51,21 +46,11 @@ export class GoogleMailApi implements MailApi {
         const res = await this.api.users.history.list({
           userId: "me",
           startHistoryId,
-          historyTypes: ["messageAdded", "labelRemoved"],
+          historyTypes: ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"],
           pageToken,
           maxResults: 500,
         });
-        for (const h of res.data.history ?? []) {
-          for (const added of h.messagesAdded ?? []) {
-            // アプリや人が下書きを保存するたびに届く通知は処理しない
-            if (added.message?.id && !added.message.labelIds?.includes("DRAFT")) ids.add(added.message.id);
-          }
-          for (const removed of h.labelsRemoved ?? []) {
-            if (removed.message?.id && removed.labelIds?.includes("UNREAD")) readIds.add(removed.message.id);
-            // 迷惑メール・ゴミ箱・プロモーションから戻されたメール（届いたときは処理を飛ばしている）
-            if (removed.message?.id && removed.labelIds?.some((l) => RESTORE_LABELS.has(l))) restoredIds.add(removed.message.id);
-          }
-        }
+        history.push(...(res.data.history ?? []));
         historyId = res.data.historyId ?? historyId;
         pageToken = res.data.nextPageToken ?? undefined;
       } while (pageToken);
@@ -73,7 +58,7 @@ export class GoogleMailApi implements MailApi {
       if (status(err) === 404) throw new HistoryExpiredError();
       throw err;
     }
-    return { messageIds: [...ids], readIds: [...readIds], restoredIds: [...restoredIds], historyId };
+    return summarizeHistory(history, historyId);
   }
 
   async listMessageIds(query: string, max: number) {

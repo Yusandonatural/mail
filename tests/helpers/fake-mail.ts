@@ -1,5 +1,6 @@
 import type { Address, GmailMessage } from "@/lib/mail/parse";
-import { MessageNotFoundError, type DraftRef, type GmailThread, type MailApi } from "@/lib/google/mail-api";
+import type { gmail_v1 } from "@googleapis/gmail";
+import { MessageNotFoundError, summarizeHistory, type DraftRef, type GmailThread, type MailApi } from "@/lib/google/mail-api";
 import { toBase64Url } from "@/lib/mail/mime";
 
 export interface FixtureInput {
@@ -85,13 +86,31 @@ export class FakeMail implements MailApi {
   restoredIds: string[] = [];
   /** 指定すれば listHistory の messageIds をこれにする（既定は全メッセージ） */
   historyIds: string[] | null = null;
+  /** Gmail の履歴（ラベルの変更・削除）。modifyMessage / trashMessage と change / deleteForever で積まれる */
+  history: gmail_v1.Schema$History[] = [];
   async listHistory() {
+    const h = summarizeHistory(this.history, "200");
     return {
+      ...h,
       messageIds: this.historyIds ?? [...this.messages.keys()],
-      readIds: this.readIds,
-      restoredIds: this.restoredIds,
-      historyId: "200",
+      readIds: [...this.readIds, ...h.readIds],
+      restoredIds: [...this.restoredIds, ...(h.restoredIds ?? [])],
     };
+  }
+  /** 人が Gmail（ウェブ・スマホ）でラベルを変えたことにする。メッセージのラベルを変え、履歴に積む */
+  change(id: string, add: string[], remove: string[]) {
+    const m = this.messages.get(id);
+    if (m) m.labelIds = [...(m.labelIds ?? []).filter((l) => !remove.includes(l) && !add.includes(l)), ...add];
+    const message = { id, threadId: m?.threadId ?? null };
+    this.history.push({
+      ...(add.length ? { labelsAdded: [{ message, labelIds: add }] } : {}),
+      ...(remove.length ? { labelsRemoved: [{ message, labelIds: remove }] } : {}),
+    });
+  }
+  /** 人が Gmail で完全に削除したことにする */
+  deleteForever(id: string) {
+    this.messages.delete(id);
+    this.history.push({ messagesDeleted: [{ message: { id } }] });
   }
   async listMessageIds() {
     return [...this.messages.keys()];
@@ -106,11 +125,15 @@ export class FakeMail implements MailApi {
   }
   async modifyMessage(id: string, add: string[], remove: string[]) {
     this.modifications.push({ id, add, remove });
+    this.change(id, add, remove);
   }
   async modifyThread(threadId: string, add: string[], remove: string[]) {
     this.modifications.push({ id: threadId, add, remove, thread: true });
+    for (const m of [...this.messages.values()].filter((x) => x.threadId === threadId)) this.change(m.id ?? "", add, remove);
   }
-  async trashMessage() {}
+  async trashMessage(id: string) {
+    this.change(id, ["TRASH"], []);
+  }
   private rawToMessage(raw: string, threadId: string | null, id: string): GmailMessage {
     // テストでは生成した MIME の本文だけ読めればよい
     const [head, ...rest] = raw.split("\r\n\r\n");

@@ -1,8 +1,9 @@
-import { and, eq, inArray, isNull, max, notInArray } from "drizzle-orm";
+import { and, eq, inArray, isNull, max, ne, notInArray } from "drizzle-orm";
 import type { Db } from "./db";
 import { dateCandidates, messages, users, type User } from "./db/schema";
 import { folderLabelName, isFolder, STATUS_LABELS } from "./domain";
-import { HistoryExpiredError, type MailApi } from "./google/mail-api";
+import { HistoryExpiredError, type HistoryChanges, type MailApi } from "./google/mail-api";
+import { markRepliedLabels } from "./pipeline";
 import { enqueue } from "./jobs";
 
 /** Gmail の watch は 7 日で切れるので、毎日（20時間以上経っていれば）更新する */
@@ -48,7 +49,8 @@ export async function syncUser(db: Db, mail: MailApi, user: User): Promise<numbe
     return 0;
   }
   try {
-    const { messageIds, readIds, restoredIds = [], historyId } = await mail.listHistory(user.historyId);
+    const changes = await mail.listHistory(user.historyId);
+    const { messageIds, readIds, restoredIds = [], historyId } = changes;
     let n = await enqueueMessages(db, user, messageIds);
     // Gmail の迷惑メールなどから人が戻したメール。届いたときのジョブは「飛ばした」で終わっているので別のキーで積む
     // （既に一覧にあるメールは processMessage が二重に作らない）
@@ -63,6 +65,7 @@ export async function syncUser(db: Db, mail: MailApi, user: User): Promise<numbe
         .set({ unread: false })
         .where(and(eq(messages.userId, user.id), inArray(messages.gmailMessageId, readIds)));
     }
+    await applyGmailChanges(db, mail, user, changes);
     await db.update(users).set({ historyId }).where(eq(users.id, user.id));
     return n;
   } catch (err) {
@@ -81,6 +84,78 @@ export async function syncUser(db: Db, mail: MailApi, user: User): Promise<numbe
     const profile = await mail.getProfile();
     await db.update(users).set({ historyId: profile.historyId }).where(eq(users.id, user.id));
     return n;
+  }
+}
+
+/**
+ * 人が Gmail（ウェブ・スマホ）で直接行った操作を一覧に反映する。
+ * アプリ自身のアーカイブ・迷惑メール・ゴミ箱も同じ履歴で届くが、その行は既に archived / skipped なので何も変わらない。
+ */
+async function applyGmailChanges(db: Db, mail: MailApi, user: User, changes: HistoryChanges): Promise<void> {
+  const { unreadIds = [], archivedIds = [], inboxIds = [], trashedIds = [], deletedIds = [] } = changes;
+  const mine = (ids: string[]) => and(eq(messages.userId, user.id), inArray(messages.gmailMessageId, ids));
+  if (unreadIds.length) await db.update(messages).set({ unread: true }).where(mine(unreadIds));
+
+  // ゴミ箱・迷惑メールへ移された、完全に削除された：アプリの迷惑メール・ゴミ箱と同じく一覧から外す。
+  // ゴミ箱・迷惑メールから戻されたら restoredIds で処理し直す
+  const gone = [...new Set([...trashedIds, ...deletedIds])];
+  if (gone.length) {
+    await db
+      .update(messages)
+      .set({ status: "skipped", needsReply: false, unread: false })
+      .where(and(mine(gone), ne(messages.status, "skipped")));
+  }
+
+  // アーカイブされた（受信トレイから外された）。受信トレイに無かったメール（フィルタで受信トレイを
+  // スキップしたものなど）は INBOX が外れる履歴が無いので含まれない
+  if (archivedIds.length) {
+    const archive = { status: "archived", needsReply: false };
+    // 要返信・下書きありだった行は、アプリのアーカイブと同じく Gmail の「要返信」「下書きあり」も外して対応済にする
+    // （失敗しても一覧はアーカイブにする。ラベルは次に人が触るまで残る）
+    const open = await db
+      .update(messages)
+      .set(archive)
+      .where(and(mine(archivedIds), inArray(messages.status, ["new", "draft_ready"])))
+      .returning({ gmailMessageId: messages.gmailMessageId });
+    await db
+      .update(messages)
+      .set(archive)
+      .where(and(mine(archivedIds), notInArray(messages.status, ["archived", "skipped"])));
+    await markRepliedLabels(
+      mail,
+      open.map((r) => r.gmailMessageId),
+    ).catch((err) => console.error("label archived messages failed", user.id, err));
+  }
+
+  // 受信トレイに戻された：アーカイブした行を一覧に戻す。要返信はアーカイブで外れているので戻さず、
+  // このメールより後に自分たちの返信がスレッドにあれば返信済、無ければ対応済にする
+  if (inboxIds.length) {
+    const rows = await db
+      .select({ id: messages.id, threadId: messages.gmailThreadId, receivedAt: messages.receivedAt })
+      .from(messages)
+      .where(and(mine(inboxIds), eq(messages.status, "archived")));
+    const sentAt = new Map<string, number[]>();
+    for (const threadId of new Set(rows.map((r) => r.threadId))) {
+      const thread = await mail.getThread(threadId).catch((err) => {
+        console.error("thread lookup failed", threadId, err);
+        return null;
+      });
+      sentAt.set(
+        threadId,
+        (thread?.messages ?? []).filter((m) => m.labelIds?.includes("SENT")).map((m) => Number(m.internalDate ?? 0)),
+      );
+    }
+    const replied = rows
+      .filter((r) => sentAt.get(r.threadId)!.some((t) => t >= r.receivedAt.getTime()))
+      .map((r) => r.id);
+    const done = rows.map((r) => r.id).filter((id) => !replied.includes(id));
+    for (const [status, ids] of [["replied", replied], ["done", done]] as const) {
+      if (!ids.length) continue;
+      await db
+        .update(messages)
+        .set({ status, needsReply: false })
+        .where(and(inArray(messages.id, ids), eq(messages.status, "archived")));
+    }
   }
 }
 
