@@ -68,6 +68,23 @@ export interface NotifySetting {
 
 export const DEFAULT_NOTIFY: NotifySetting = { mode: "urgent" };
 
+/** 返信の下書きに入れる案内のリンク（設定画面で変えられる） */
+export interface ReplyLinks {
+  /** 卸売の問い合わせに入れる卸売ページ */
+  wholesaleJa: string;
+  wholesaleEn: string;
+  /** インターン・Learning Tea Program の応募に入れる案内ページと WhatsApp */
+  learningProgram: string;
+  whatsapp: string;
+}
+
+export const DEFAULT_REPLY_LINKS: ReplyLinks = {
+  wholesaleJa: "https://yusando.com/pages/oroshi",
+  wholesaleEn: "https://yusando.com/pages/wholesale",
+  learningProgram: "https://yusando.com/pages/tea-apprenticeship",
+  whatsapp: "https://wa.me/818014094139",
+};
+
 export const DEFAULT_SIGNATURES: Signatures = {
   ja: [
     "─────────────",

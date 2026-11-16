@@ -191,3 +191,32 @@ describe("下書き用の調べもので外に出さないもの", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("返信に入れるリンク", () => {
+  it("プロンプトに案内として渡す（無ければ何も書かない）", () => {
+    const base = {
+      businessContext: "", playbooks: {}, category: "intern", language: "en", summary: "s", senderName: "A", senderEmail: "a@x.example",
+      knownContact: false, contactNotes: "", contactSummary: "", signature: "sig", thread: [], now: "2026年11月16日(月) 9:00",
+      tools: { shop: null, calendar: null }, wantSlots: false, instruction: null, previousDraft: null,
+    } satisfies DraftRequest;
+    expect(userPrompt({ ...base, links: ["WhatsApp（https://wa.me/818014094139）: 気軽に連絡を"] })).toContain("この返信に入れる案内");
+    expect(userPrompt(base)).not.toContain("この返信に入れる案内");
+  });
+});
+
+describe("申し込みフォームの通知への返信先", () => {
+  it("noreply@jotform.com からの通知は、本文の Email 欄の申込者に宛てる", async () => {
+    const { replyAddress } = await import("@/lib/drafts");
+    const jotform = {
+      from: { name: "Christina Ooi Qian Hua", email: "noreply@jotform.com" },
+      replyTo: null,
+      text: "Yusando Tea Learning Program — Application\nFull Name Christina Ooi Qian Hua\nEmail Address christinalorhhh@gmail.com\nCountry of Residence Singapore",
+    };
+    expect(replyAddress(jotform)).toEqual({ name: "Christina Ooi Qian Hua", email: "christinalorhhh@gmail.com" });
+    // Reply-To が申込者になっていればそれを使う。ふつうのメールはそのまま
+    expect(replyAddress({ ...jotform, replyTo: { name: "C", email: "c@x.example" } }).email).toBe("c@x.example");
+    expect(replyAddress({ from: { name: "Ben", email: "ben@shop.example" }, replyTo: null, text: "Email: other@x.example" }).email).toBe("ben@shop.example");
+    // 本文にアドレスが無ければ元の送り元のまま（人が宛先を直す）
+    expect(replyAddress({ ...jotform, text: "no address" }).email).toBe("noreply@jotform.com");
+  });
+});

@@ -41,6 +41,8 @@ export interface DraftRequest {
   /** いまの日本時間（相対的な日付を直すため） */
   now: string;
   tools: DraftTools;
+  /** このカテゴリの返信に入れる案内のリンク（卸売ページ・WhatsApp など） */
+  links?: string[];
   /** 日程の候補を必ず入れる（「日程の候補を入れて書く」ボタン） */
   wantSlots: boolean;
   instruction: string | null;
@@ -122,6 +124,9 @@ export function userPrompt(req: DraftRequest): string {
     `相手: ${req.senderName ?? "不明"} <${req.senderEmail}>（${req.knownContact ? "これまでにやりとりがある" : "初めての相手の可能性が高い"}）`,
     `使える調べもの: ${available.length ? available.join("、") : "なし（確かめられない事実は【要確認】にする）"}`,
   ];
+  if (req.links?.length) {
+    parts.push(`この返信に入れる案内（本文の自然な位置に、URL はそのまま書く）:\n${req.links.map((l) => `- ${l}`).join("\n")}`);
+  }
   if (req.contactNotes || req.contactSummary) {
     parts.push(asData("contact_notes", [req.contactNotes, req.contactSummary].filter(Boolean).join("\n")));
   }

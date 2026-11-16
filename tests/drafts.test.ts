@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { drafts, messages } from "@/lib/db/schema";
-import { adoptGmailDrafts, generateDraft, saveDraftText } from "@/lib/drafts";
+import { adoptGmailDrafts, generateDraft, replyLinksFor, saveDraftText } from "@/lib/drafts";
+import { DEFAULT_REPLY_LINKS } from "@/lib/db/seed";
 import { buildMime } from "@/lib/mail/mime";
 import type { DraftRequest, DraftWriter } from "@/lib/claude/drafter";
 import { parseDraftOutput } from "@/lib/claude/drafter";
@@ -165,6 +166,21 @@ describe("返信下書きの生成", () => {
     expect(drafter.requests).toHaveLength(2);
     const [d] = await db.select().from(drafts);
     expect(d.replyToMessageId).toBe("m2");
+  });
+
+  it("卸売の問い合わせには卸売ページ、インターンの応募には案内ページと WhatsApp を入れる", async () => {
+    const { drafter, user, deps } = await setup("wholesale", "en");
+    await generateDraft(deps, user, "t1", "m1", { generatedBy: "auto" });
+    expect(drafter.requests[0].links).toEqual(["卸売のご案内ページ（取扱商品・条件・お申し込み）: https://yusando.com/pages/wholesale"]);
+    const intern = await setup("intern", "en");
+    await generateDraft(intern.deps, intern.user, "t1", "m1", { generatedBy: "auto" });
+    const links = intern.drafter.requests[0].links ?? [];
+    expect(links.join("\n")).toContain("https://yusando.com/pages/tea-apprenticeship");
+    expect(links.join("\n")).toContain("https://wa.me/818014094139");
+    // 日本語の卸の問い合わせには日本語のページ。ほかのカテゴリには何も入れない
+    expect(replyLinksFor("wholesale", "ja", DEFAULT_REPLY_LINKS)[0]).toContain("/pages/oroshi");
+    expect(replyLinksFor("tour", "en", DEFAULT_REPLY_LINKS)).toEqual([]);
+    expect(replyLinksFor("intern", "en", { ...DEFAULT_REPLY_LINKS, whatsapp: "" }).join("")).not.toContain("WhatsApp");
   });
 
   it("画面で編集した本文を、宛先と件名を保ったまま保存する", async () => {

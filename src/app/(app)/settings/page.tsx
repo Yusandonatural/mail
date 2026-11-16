@@ -23,6 +23,7 @@ import {
   saveAddressAction,
   saveAutoDraftAction,
   saveBusinessContextAction,
+  saveReplyLinksAction,
   saveBusinessHoursAction,
   saveCalendarMapAction,
   savePlaybookAction,
@@ -80,6 +81,7 @@ export default async function SettingsPage({
   const admin = await requireAdmin();
   const db = await getDb();
   const claudeHealth = await getSetting(db, "claudeHealth");
+  const replyLinks = await getSetting(db, "replyLinks");
   const claudeFailure = claudeFailing(claudeHealth);
   const [addresses, ruleRows, userRows, playbookRows, logs, failedJobs] = await Promise.all([
     db.select().from(addressMap).orderBy(addressMap.address),
@@ -483,6 +485,29 @@ export default async function SettingsPage({
       <section className="panel" aria-labelledby="playbooks">
         <h2 id="playbooks">下書きの書き方</h2>
         <div className="disclosures">
+        <details>
+          <summary>返信に入れるリンク（卸売ページ・WhatsApp）</summary>
+          <form action={saveReplyLinksAction} className="stack">
+            <p className="meta">卸売の問い合わせの下書きには卸売ページを、インターン（Learning Tea Program）の応募の下書きには案内ページと WhatsApp を入れます。空にするとそのリンクは入れません。</p>
+            <div>
+              <label htmlFor="link-wholesale-ja">卸売ページ（日本語の返信）</label>
+              <input id="link-wholesale-ja" name="wholesaleJa" type="url" defaultValue={replyLinks.wholesaleJa} />
+            </div>
+            <div>
+              <label htmlFor="link-wholesale-en">卸売ページ（英語などの返信）</label>
+              <input id="link-wholesale-en" name="wholesaleEn" type="url" defaultValue={replyLinks.wholesaleEn} />
+            </div>
+            <div>
+              <label htmlFor="link-learning">Learning Tea Program の案内ページ</label>
+              <input id="link-learning" name="learningProgram" type="url" defaultValue={replyLinks.learningProgram} />
+            </div>
+            <div>
+              <label htmlFor="link-whatsapp">WhatsApp のリンク</label>
+              <input id="link-whatsapp" name="whatsapp" type="url" placeholder="https://wa.me/81..." defaultValue={replyLinks.whatsapp} />
+            </div>
+            <SubmitButton>保存</SubmitButton>
+          </form>
+        </details>
         <details>
           <summary>会社情報（全ての下書きで Claude に渡します）</summary>
           <form action={saveBusinessContextAction} className="stack">

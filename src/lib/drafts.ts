@@ -10,6 +10,7 @@ import { buildMime, replySubject } from "./mail/mime";
 import { parseMessage, stripQuoted, type Address, type ParsedMessage } from "./mail/parse";
 import { bodyHash } from "./crypto";
 import { getSetting } from "./settings";
+import type { ReplyLinks } from "./db/seed";
 import { freeWindows, proposeSlots } from "./slots";
 import { addDays, formatJst, fromJst, jstParts, startOfJstDay } from "./time";
 import { isMostlyJapanese } from "./translate";
@@ -119,6 +120,44 @@ export async function adoptGmailDrafts(db: Db, mail: MailApi, user: User, thread
   return adopted;
 }
 
+/**
+ * カテゴリごとに、返信の下書きに必ず入れる案内。
+ * 卸売の問い合わせには卸売ページ、インターン（Learning Tea Program など）の応募には案内ページと WhatsApp
+ */
+export function replyLinksFor(category: string | null, language: string, links: ReplyLinks): string[] {
+  const out: string[] = [];
+  if (category === "wholesale") {
+    const page = language === "ja" ? links.wholesaleJa : links.wholesaleEn || links.wholesaleJa;
+    if (page) out.push(`卸売のご案内ページ（取扱商品・条件・お申し込み）: ${page}`);
+  }
+  if (category === "intern") {
+    if (links.learningProgram) out.push(`Learning Tea Program の案内ページ: ${links.learningProgram}`);
+    if (links.whatsapp) {
+      out.push(`WhatsApp（${links.whatsapp}）: 質問や面談の日程は WhatsApp でも気軽に連絡してほしい、と案内する`);
+    }
+  }
+  return out;
+}
+
+/** 申し込みフォーム（Jotform・Tally・Google フォームなど）の通知の送り元。返信しても相手に届かない */
+const FORM_SENDER = /(^|[.@])(no-?reply|noreply|forms?-receipts?-noreply)\b|@(jotform\.com|tally\.so|typeform\.com)$/i;
+
+/**
+ * 返信の宛先。ふつうは Reply-To（無ければ From）。
+ * 申し込みフォームの通知は noreply@jotform.com などから届き、相手のアドレスは本文の「Email」欄にあるので、
+ * そのアドレスに宛てる（名前は通知の表示名＝申込者の名前を使う）
+ */
+export function replyAddress(target: Pick<ParsedMessage, "from" | "replyTo" | "text">): Address {
+  const base = target.replyTo ?? target.from!;
+  if (!FORM_SENDER.test(base.email)) return base;
+  const emails = [...target.text.matchAll(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g)].map((m) => m[0]);
+  // 「Email」「メール」の欄のすぐ後ろのアドレスを優先し、無ければ本文で最初のフォーム以外のアドレス
+  const labelled = target.text.match(/(?:e-?mail(?:\s+address)?|メール(?:アドレス)?)\s*[:：]?\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/i)?.[1];
+  const email = labelled ?? emails.find((e) => !FORM_SENDER.test(e) && !/@yusando\.com$/i.test(e));
+  if (!email) return base;
+  return { name: target.from?.name ?? null, email: email.toLowerCase() };
+}
+
 export async function generateDraft(
   deps: DraftDeps,
   user: User,
@@ -198,7 +237,7 @@ export async function generateDraft(
       : "en";
 
   // 問合せフォームの通知（From: mailer@shopify.com、Reply-To: お客様）などは Reply-To が相手
-  const replyTo = target.replyTo ?? target.from;
+  const replyTo = replyAddress(target);
   const contact = (await db.select().from(contacts).where(eq(contacts.email, replyTo.email)).limit(1))[0];
   const priorFromSender = parsed.filter((m) => m.from?.email === target.from?.email).length > 1;
   const knownContact = Boolean(contact?.notes || contact?.lastSummary || priorFromSender || parsed.some(isOurs));
@@ -243,6 +282,7 @@ export async function generateDraft(
       shop: deps.shop,
       calendar: deps.calendar ? calendarTools(db, deps.calendar) : null,
     },
+    links: replyLinksFor(category, language, await getSetting(db, "replyLinks")),
     wantSlots: Boolean(opts.withSlots),
     instruction: opts.instruction ?? null,
     previousDraft: opts.instruction ? previousText : null,

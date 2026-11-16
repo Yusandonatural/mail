@@ -9,6 +9,8 @@ import {
   DEFAULT_SIGNATURES,
   DEFAULT_FREEE,
   DEFAULT_NOTIFY,
+  DEFAULT_REPLY_LINKS,
+  type ReplyLinks,
   type FreeeSetting,
   type NotifySetting,
   type AutoDraftMap,
@@ -33,6 +35,7 @@ interface SettingTypes {
   freee: FreeeSetting;
   notify: NotifySetting;
   claudeHealth: ClaudeHealth;
+  replyLinks: ReplyLinks;
 }
 
 const DEFAULTS: SettingTypes = {
@@ -44,6 +47,7 @@ const DEFAULTS: SettingTypes = {
   freee: DEFAULT_FREEE,
   notify: DEFAULT_NOTIFY,
   claudeHealth: { lastError: null, lastErrorAt: null, lastOkAt: null },
+  replyLinks: DEFAULT_REPLY_LINKS,
 };
 
 export type SettingKey = keyof SettingTypes;

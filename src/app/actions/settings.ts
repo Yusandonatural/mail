@@ -152,6 +152,26 @@ export async function saveAutoDraftAction(formData: FormData): Promise<void> {
   done();
 }
 
+/** 返信の下書きに入れるリンク。https の URL だけを受け付ける（空ならそのリンクは入れない） */
+export async function saveReplyLinksAction(formData: FormData): Promise<void> {
+  const admin = await requireAdmin();
+  const db = await getDb();
+  const url = (name: string) => {
+    const v = String(formData.get(name) ?? "").trim();
+    if (!v) return "";
+    if (!/^https:\/\/[^\s]+$/.test(v)) throw new Error("リンクは https:// で始まる URL を入れてください");
+    return v.slice(0, 500);
+  };
+  await putSetting(db, "replyLinks", {
+    wholesaleJa: url("wholesaleJa"),
+    wholesaleEn: url("wholesaleEn"),
+    learningProgram: url("learningProgram"),
+    whatsapp: url("whatsapp"),
+  });
+  await audit(db, admin.id, "settings_changed", "replyLinks");
+  done();
+}
+
 export async function saveBusinessContextAction(formData: FormData): Promise<void> {
   const admin = await requireAdmin();
   const db = await getDb();
