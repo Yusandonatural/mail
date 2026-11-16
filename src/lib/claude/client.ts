@@ -2,8 +2,17 @@ import Anthropic from "@anthropic-ai/sdk";
 
 let client: Anthropic | null = null;
 
+/**
+ * ワークスペースが決まっていない API キー（組織全体のキー）では、使うワークスペースの ID を
+ * anthropic-workspace-id ヘッダーで毎回伝える必要がある。ANTHROPIC_WORKSPACE_ID があれば付ける
+ */
+export function clientOptions(env: NodeJS.ProcessEnv = process.env): ConstructorParameters<typeof Anthropic>[0] {
+  const workspace = env.ANTHROPIC_WORKSPACE_ID?.trim();
+  return workspace ? { defaultHeaders: { "anthropic-workspace-id": workspace } } : {};
+}
+
 export function anthropic(): Anthropic {
-  client ??= new Anthropic();
+  client ??= new Anthropic(clientOptions());
   return client;
 }
 
@@ -46,6 +55,9 @@ export function describeClaudeError(err: unknown): string {
     if (err.status === 403) return "この API キーでは Claude を使う権限がありません";
     if (err.status === 404) return `モデルが見つかりません（${msg.slice(0, 120)}）`;
     if (err.status === 400 && /credit|balance/i.test(msg)) return "Anthropic の残高（クレジット）が足りません";
+    if (err.status === 400 && /workspace/i.test(msg)) {
+      return "この API キーはワークスペースが決まっていません（ANTHROPIC_WORKSPACE_ID にワークスペースの ID を入れるか、ワークスペースを選んでキーを作り直してください）";
+    }
     return `Claude の呼び出しに失敗しました（${err.status ?? "?"}: ${msg.slice(0, 160)}）`;
   }
   if (err instanceof Error && /api[_ ]?key/i.test(err.message)) return "Anthropic の API キーが設定されていません";

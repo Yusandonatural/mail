@@ -28,7 +28,7 @@ steps:
       - |
         set -euo pipefail
         secrets="DATABASE_URL=DATABASE_URL:latest,SESSION_SECRET=SESSION_SECRET:latest,TOKEN_ENCRYPTION_KEY=TOKEN_ENCRYPTION_KEY:latest,CRON_SECRET=CRON_SECRET:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest"
-        for s in FREEE_CLIENT_ID FREEE_CLIENT_SECRET SHOPIFY_STORE_DOMAIN SHOPIFY_ADMIN_TOKEN VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY; do
+        for s in ANTHROPIC_WORKSPACE_ID FREEE_CLIENT_ID FREEE_CLIENT_SECRET SHOPIFY_STORE_DOMAIN SHOPIFY_ADMIN_TOKEN VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY; do
           # describe は secretAccessor だけでは許可されないので、値を読めるかで確かめる（値は捨てる）
           if gcloud secrets versions access latest --secret "$$s" >/dev/null 2>&1; then secrets="$$secrets,$$s=$$s:latest"; fi
         done

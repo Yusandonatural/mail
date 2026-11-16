@@ -346,3 +346,21 @@ describe("Gmail で作られた下書き", () => {
     expect(ready).toHaveLength(2);
   });
 });
+
+describe("ワークスペースが決まっていない API キー", () => {
+  it("ANTHROPIC_WORKSPACE_ID があればヘッダーで伝え、無ければ何も付けない", async () => {
+    const { clientOptions, describeClaudeError } = await import("@/lib/claude/client");
+    expect(clientOptions({ ANTHROPIC_WORKSPACE_ID: " wrkspc_abc " } as unknown as NodeJS.ProcessEnv)).toEqual({
+      defaultHeaders: { "anthropic-workspace-id": "wrkspc_abc" },
+    });
+    expect(clientOptions({} as unknown as NodeJS.ProcessEnv)).toEqual({});
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const err = Anthropic.APIError.generate(
+      400,
+      { type: "error", error: { type: "invalid_request_error", message: "This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header" } },
+      undefined,
+      new Headers(),
+    );
+    expect(describeClaudeError(err)).toContain("ワークスペースが決まっていません");
+  });
+});
