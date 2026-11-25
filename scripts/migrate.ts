@@ -8,6 +8,7 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import { schema, type Db } from "../src/lib/db";
 import { seedDefaults } from "../src/lib/db/seed";
+import { repairStoredHeaders } from "../src/lib/db/repair";
 
 /** 複数のインスタンスが同時に起動しても、マイグレーションは1つずつ行う */
 const LOCK_ID = 7_301_2015;
@@ -23,6 +24,12 @@ async function main() {
     const db = drizzle(pool, { schema });
     await migrate(db, { migrationsFolder: process.env.MIGRATIONS_DIR || "drizzle" });
     await seedDefaults(db as unknown as Db, domain);
+    // 文字化けしたまま保存された件名・差出人名を直す（失敗しても起動は止めない）
+    const repaired = await repairStoredHeaders(db as unknown as Db).catch((err) => {
+      console.error("header repair failed", err);
+      return 0;
+    });
+    if (repaired) console.log(`repaired ${repaired} garbled headers`);
     console.log("migrated and seeded");
   } finally {
     await lock.query("select pg_advisory_unlock($1)", [LOCK_ID]).catch(() => undefined);
